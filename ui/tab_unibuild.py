@@ -10,6 +10,7 @@ pipeline builders and does not change any build, queue, threading or settings
 logic.
 """
 import os
+import sys
 import time
 import threading
 import tkinter as tk

@@ -13180,7 +13180,8 @@ class ExFATBuilder(_TK_BASE):
                                 'src.decrypt_fself', 'src.ps5_sdk_version_patcher']:
                         if mod in sys.modules:
                             del sys.modules[mod]
-                    from Backport import PS5ELFProcessor
+                    import importlib as _implib
+                    PS5ELFProcessor = _implib.import_module('Backport').PS5ELFProcessor
                     bp_available = True
                     self.after(0, self._abp_log_line,
                                '✓ Backport.py loaded — full decrypt/re-sign pipeline',
@@ -17283,28 +17284,28 @@ class ExFATBuilder(_TK_BASE):
 
             # Hover effect — subtle bg lift
             def _hover_in(_e=None, w=inner):
-                w.configure(bg=_TC['bg_3'])
+                w['bg'] = _TC['bg_3']
                 for ch in w.winfo_children():
                     try:
-                        ch.configure(bg=_TC['bg_3'])
+                        ch['bg'] = _TC['bg_3']
                         # Also recolor any sub-frames
                         for sub in ch.winfo_children():
                             try:
                                 if not hasattr(sub, '_pill_protected'):
-                                    sub.configure(bg=_TC['bg_3'])
+                                    sub['bg'] = _TC['bg_3']
                             except Exception:
                                 pass
                     except Exception:
                         pass
             def _hover_out(_e=None, w=inner):
-                w.configure(bg=_TC['bg_2'])
+                w['bg'] = _TC['bg_2']
                 for ch in w.winfo_children():
                     try:
-                        ch.configure(bg=_TC['bg_2'])
+                        ch['bg'] = _TC['bg_2']
                         for sub in ch.winfo_children():
                             try:
                                 if not hasattr(sub, '_pill_protected'):
-                                    sub.configure(bg=_TC['bg_2'])
+                                    sub['bg'] = _TC['bg_2']
                             except Exception:
                                 pass
                     except Exception:
@@ -19629,7 +19630,8 @@ class ExFATBuilder(_TK_BASE):
                                     'src.decrypt_fself', 'src.ps5_sdk_version_patcher']:
                             if mod in sys.modules:
                                 del sys.modules[mod]
-                        from Backport import PS5ELFProcessor
+                        import importlib as _implib2
+                        PS5ELFProcessor = _implib2.import_module('Backport').PS5ELFProcessor
                         import io as _io, re as _re
                         processor = PS5ELFProcessor(use_colors=False)
                         old_stdout = sys.stdout
@@ -21594,22 +21596,6 @@ class ExFATBuilder(_TK_BASE):
                 listbox.insert('end', '\U0001f4be  %-50s %s' % (name, sz_str))
 
         _load()
-
-
-
-        if pct is not None:
-            if kind == 'step':
-                self._set_progress(pct, extra,
-                    self._format_eta(elapsed, pct) if pct > 0 else '')
-            elif kind == 'robo_eta':
-                es = 'Elapsed: %dm %02ds' % (int(elapsed // 60), int(elapsed % 60))
-                self._set_progress(pct, None,
-                    es + '  \u2014  ' + extra if extra
-                    else self._format_eta(elapsed, pct))
-            else:
-                self._set_progress(pct, None, self._format_eta(elapsed, pct))
-        elif self._current_pct > 0 and self._start_time:
-            self._eta_var.set(self._format_eta(elapsed, self._current_pct))
 
     # ── Real-time drive polling ────────────────────────────────────────────────
     def _maybe_kick_dest_walk(self):
