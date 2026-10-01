@@ -13,6 +13,9 @@ import re
 import struct
 import json
 
+from ui.mac_compat import patch_system_for_mac, IS_MACOS, setup_mac_shortcuts
+patch_system_for_mac()
+
 # ── tkinterdnd2 — optional, enables drag & drop of folders ──
 try:
     from tkinterdnd2 import TkinterDnD, DND_FILES
@@ -401,6 +404,13 @@ def extract_scripts(custom_temp=None):
         f.write(base64.b64decode(_PS1_B64))
     with open(ico_path, 'wb') as f:
         f.write(base64.b64decode(_ICO_B64))
+    if sys.platform == 'darwin':
+        mac_script = os.path.join(_TEMP_DIR, 'make_image_mac.py')
+        src_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'make_image_mac.py')
+        if os.path.isfile(src_script):
+            shutil.copy2(src_script, mac_script)
+        os.chmod(mac_script, 0o755)
+        return mac_script, ico_path
     return bat_path, ico_path
 
 def cleanup_scripts():
@@ -668,12 +678,16 @@ def clear_temp_folder(base_dir):
     return True, removed, size
 
 def is_admin():
+    if os.name != 'nt':
+        return True
     try:
         return ctypes.windll.shell32.IsUserAnAdmin()
     except Exception:
         return False
 
 def relaunch_as_admin():
+    if os.name != 'nt':
+        return
     script = os.path.abspath(sys.argv[0])
     params = ' '.join('"' + a + '"' for a in sys.argv[1:])
     try:
@@ -3285,7 +3299,10 @@ class ExFATBuilder(_TK_BASE):
         # Existing tk.* widgets with explicit bg/fg kwargs continue to work;
         # they'll be migrated to ttk styles tab-by-tab in Step 3+.
         apply_theme(self)
-        self.title('exFAT Image Builder  [Administrator]')
+        if IS_MACOS:
+            self.title('exFAT Image Builder')
+        else:
+            self.title('exFAT Image Builder  [Administrator]')
 
         self._settings = load_settings()
 
@@ -3341,11 +3358,27 @@ class ExFATBuilder(_TK_BASE):
         self.bind_all('<Control-Q>',     lambda e: self._on_close())
         self.bind_all('<Control-Shift-T>', self._kbd_test_ftp)
         self.bind_all('<F5>',            self._kbd_refresh)
+        if IS_MACOS:
+            self.bind_all('<Command-b>', self._kbd_build)
+            self.bind_all('<Command-B>', self._kbd_build)
+            self.bind_all('<Command-q>', lambda e: self._on_close())
+            self.bind_all('<Command-Q>', lambda e: self._on_close())
+            setup_mac_shortcuts(self)
 
         self._bat_path, ico_path = extract_scripts(
             self._settings.get('temp_dir'))
         try:
-            self.iconbitmap(ico_path)
+            if IS_MACOS:
+                png_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets', 'app_icon.png')
+                if os.path.isfile(png_path):
+                    from PIL import Image, ImageTk
+                    _icon_img = ImageTk.PhotoImage(Image.open(png_path).resize((64, 64)))
+                    self.iconphoto(True, _icon_img)
+                    self._mac_app_icon = _icon_img
+                else:
+                    self.iconbitmap(ico_path)
+            else:
+                self.iconbitmap(ico_path)
         except Exception:
             pass
 
@@ -3353,7 +3386,8 @@ class ExFATBuilder(_TK_BASE):
         self.output_dir  = tk.StringVar(
             value=self._settings.get('output_dir', ''))
         self.output_name = tk.StringVar(value='game.exfat')
-        self.status_text = tk.StringVar(value='Running as Administrator  ✓')
+        self.status_text = tk.StringVar(
+            value='Ready  ✓' if IS_MACOS else 'Running as Administrator  ✓')
         self._temp_dir_var = tk.StringVar(
             value=self._settings.get('temp_dir', ''))
         self._osfmount_path_var = tk.StringVar(
@@ -6798,6 +6832,9 @@ class ExFATBuilder(_TK_BASE):
         os.path.isfile() — hence the "Settings says installed, build
         says missing" inconsistency.
         """
+        if sys.platform == 'darwin':
+            return '/usr/bin/hdiutil'
+
         import os
         import shutil as _sh
 
@@ -7419,75 +7456,100 @@ class ExFATBuilder(_TK_BASE):
         common OSFMount labels (OSFIMG, PS5DATA, PS5IMG). Anything
         else is treated as a physical drive and hidden.
         """
-        import ctypes as _ct
         import os as _os
 
-        # ── Identify the system drive ──
-        try:
-            sys_drive = _os.environ.get('SystemDrive', 'C:')
-            sys_letter = sys_drive.rstrip(':\\').upper()[:1]
-        except Exception:
-            sys_letter = 'C'
-
-        bitmask = _ct.windll.kernel32.GetLogicalDrives()
-        drives  = []
-
-        for i in range(2, 26):  # skip A, B
-            if not (bitmask & (1 << i)):
-                continue
-            letter = chr(65 + i)
-            drive  = letter + ':\\'
-
-            # ── HARD EXCLUSIONS ──
-            if letter == sys_letter:
-                continue
+        drives = []
+        if sys.platform == 'darwin':
             try:
-                if _os.path.isdir(drive + 'Windows\\System32'):
-                    continue
+                import psutil
+                for p in psutil.disk_partitions(all=True):
+                    mp = p.mountpoint
+                    if mp in ('/', '/System') or mp.startswith('/System/') or mp.startswith('/private'):
+                        continue
+                    name = os.path.basename(mp)
+                    if not name:
+                        continue
+                    is_current = bool(self._mounted_drive and (mp == self._mounted_drive or name in self._mounted_drive))
+                    is_virtual = bool(is_current or 'PS5' in name.upper() or 'ps5' in mp.lower())
+                    try:
+                        usage = shutil.disk_usage(mp)
+                        size_str = '%.1f GB' % (usage.total / 1024**3)
+                    except Exception:
+                        size_str = '?'
+                    drives.append({
+                        'letter':     mp,
+                        'label':      name,
+                        'size':       size_str,
+                        'current':    is_current,
+                        'is_virtual': is_virtual,
+                    })
             except Exception:
                 pass
+        else:
+            import ctypes as _ct
+            # ── Identify the system drive ──
             try:
-                dtype = _ct.windll.kernel32.GetDriveTypeW(drive)
-                if dtype not in (2, 3):  # removable or fixed only
+                sys_drive = _os.environ.get('SystemDrive', 'C:')
+                sys_letter = sys_drive.rstrip(':\\').upper()[:1]
+            except Exception:
+                sys_letter = 'C'
+
+            bitmask = _ct.windll.kernel32.GetLogicalDrives()
+
+            for i in range(2, 26):  # skip A, B
+                if not (bitmask & (1 << i)):
                     continue
-            except Exception:
-                continue
+                letter = chr(65 + i)
+                drive  = letter + ':\\'
 
-            # Gather info
-            try:
-                vol_buf = _ct.create_unicode_buffer(256)
-                _ct.windll.kernel32.GetVolumeInformationW(
-                    drive, vol_buf, 256, None, None, None, None, 0)
-                label = vol_buf.value or 'No Label'
-            except Exception:
-                label = 'No Label'
+                # ── HARD EXCLUSIONS ──
+                if letter == sys_letter:
+                    continue
+                try:
+                    if _os.path.isdir(drive + 'Windows\\System32'):
+                        continue
+                except Exception:
+                    pass
+                try:
+                    dtype = _ct.windll.kernel32.GetDriveTypeW(drive)
+                    if dtype not in (2, 3):  # removable or fixed only
+                        continue
+                except Exception:
+                    continue
 
-            try:
-                usage = shutil.disk_usage(drive)
-                size_gb = usage.total / 1024**3
-                size_str = '%.1f GB' % size_gb
-            except Exception:
-                size_str = '?'
+                # Gather info
+                try:
+                    vol_buf = _ct.create_unicode_buffer(256)
+                    _ct.windll.kernel32.GetVolumeInformationW(
+                        drive, vol_buf, 256, None, None, None, None, 0)
+                    label = vol_buf.value or 'No Label'
+                except Exception:
+                    label = 'No Label'
 
-            is_current = bool(self._mounted_drive and
-                              letter in self._mounted_drive.upper())
+                try:
+                    usage = shutil.disk_usage(drive)
+                    size_gb = usage.total / 1024**3
+                    size_str = '%.1f GB' % size_gb
+                except Exception:
+                    size_str = '?'
 
-            # Heuristic: is this an OSFMount virtual drive?
-            # Sure-things: current build target, or label is one of
-            # the well-known OSFMount labels.
-            up_label = (label or '').upper()
-            is_virtual = bool(
-                is_current
-                or up_label in ('OSFIMG', 'PS5DATA', 'PS5IMG')
-            )
+                is_current = bool(self._mounted_drive and
+                                  letter in self._mounted_drive.upper())
 
-            drives.append({
-                'letter':     letter,
-                'label':      label,
-                'size':       size_str,
-                'current':    is_current,
-                'is_virtual': is_virtual,
-            })
+                # Heuristic: is this an OSFMount virtual drive?
+                up_label = (label or '').upper()
+                is_virtual = bool(
+                    is_current
+                    or up_label in ('OSFIMG', 'PS5DATA', 'PS5IMG')
+                )
+
+                drives.append({
+                    'letter':     letter,
+                    'label':      label,
+                    'size':       size_str,
+                    'current':    is_current,
+                    'is_virtual': is_virtual,
+                })
 
         if not drives:
             messagebox.showinfo(
@@ -7540,9 +7602,12 @@ class ExFATBuilder(_TK_BASE):
                            cursor='hand2').pack(side='left')
             color = ACCENT if d['current'] else (
                 '#c08040' if not d['is_virtual'] else TEXT)
+            if sys.platform == 'darwin':
+                label_text = '%s  (%s)%s' % (d['label'], d['size'], tag)
+            else:
+                label_text = '%s:  %s  (%s)%s' % (d['letter'], d['label'], d['size'], tag)
             tk.Label(row,
-                     text='%s:  %s  (%s)%s' % (
-                         d['letter'], d['label'], d['size'], tag),
+                     text=label_text,
                      font=('Segoe UI', 9),
                      bg=BG, fg=color,
                      anchor='w').pack(side='left')
@@ -7611,22 +7676,27 @@ class ExFATBuilder(_TK_BASE):
             # Final safety: refuse if any picked drive is the system
             # drive or has a Windows folder.
             for letter in picks:
-                if letter == sys_letter:
-                    messagebox.showerror(
-                        'Cannot dismount',
-                        'Refusing to dismount %s: — it\'s your system '
-                        'drive.' % letter)
-                    return
-                try:
-                    if _os.path.isdir(letter + ':\\Windows\\System32'):
+                if sys.platform != 'darwin':
+                    if letter == sys_letter:
                         messagebox.showerror(
                             'Cannot dismount',
-                            ('Refusing to dismount %s: — looks like '
-                             'a Windows install (contains '
-                             '\\Windows\\System32).') % letter)
+                            'Refusing to dismount %s: — it\'s your system '
+                            'drive.' % letter)
                         return
-                except Exception:
-                    pass
+                    try:
+                        if _os.path.isdir(letter + ':\\Windows\\System32'):
+                            messagebox.showerror(
+                                'Cannot dismount',
+                                ('Refusing to dismount %s: — looks like '
+                                 'a Windows install (contains '
+                                 '\\Windows\\System32).') % letter)
+                            return
+                    except Exception:
+                        pass
+                else:
+                    if letter in ('/', '/System') or letter.startswith('/System'):
+                        messagebox.showerror('Cannot dismount', 'Refusing to dismount system volume.')
+                        return
             selected[0] = picks
             dlg.destroy()
 
@@ -7665,10 +7735,10 @@ class ExFATBuilder(_TK_BASE):
 
         msg = ''
         if dismounted:
-            msg += 'Dismounted: %s\n' % ', '.join(l + ':'
+            msg += 'Dismounted: %s\n' % ', '.join(l if sys.platform == 'darwin' else (l + ':')
                                                    for l in dismounted)
         if failed:
-            msg += 'Failed: %s' % ', '.join(l + ':' for l in failed)
+            msg += 'Failed: %s' % ', '.join(l if sys.platform == 'darwin' else (l + ':') for l in failed)
         if msg:
             messagebox.showinfo('Force Dismount', msg.strip())
 
@@ -7692,6 +7762,15 @@ class ExFATBuilder(_TK_BASE):
         Returns True if the drive is no longer present after the
         attempt, False otherwise.
         """
+        if sys.platform == 'darwin':
+            import subprocess as _sp
+            import os as _os
+            target = letter
+            res = _sp.run(['hdiutil', 'detach', target, '-force'], capture_output=True)
+            if res.returncode == 0 or not _os.path.exists(target):
+                return True
+            _sp.run(['diskutil', 'unmount', 'force', target], capture_output=True)
+            return not _os.path.exists(target)
         import time as _t
         import subprocess as _sp
         import ctypes as _ct
@@ -8322,14 +8401,15 @@ class ExFATBuilder(_TK_BASE):
 
         # ── Detect mounted drive letter from PS5 output ──
         if not self._mounted_drive:
-            m = re.search(r'logical volume on ([A-Z]:)', line)
+            m = re.search(r'logical volume on\s+([A-Za-z]:|[/\\][^\r\n]+)', line)
             if m:
-                self._mounted_drive = m.group(1)
+                self._mounted_drive = m.group(1).strip()
 
         # ── When copy phase starts, snapshot free space and begin polling ──
         if '[3/4]' in line and self._mounted_drive and self._drive_poll_id is None:
             try:
-                usage = shutil.disk_usage(self._mounted_drive + '\\')
+                _drive_target = self._mounted_drive if os.path.isabs(self._mounted_drive) else (self._mounted_drive + '\\')
+                usage = shutil.disk_usage(_drive_target)
                 self._image_total_gb  = usage.total / (1024 ** 3)
                 self._copy_start_free = usage.free
                 self._copy_start_time = time.time()
@@ -8828,13 +8908,22 @@ class ExFATBuilder(_TK_BASE):
             img_override = str(per_item_size).strip()
             self._log('[INFO] Using per-item image size override: '
                       '%s GB\n' % img_override)
+        if sys.platform == 'darwin':
+            if getattr(sys, 'frozen', False):
+                cmd_list = [sys.executable, '--__make_image_mac__', out_path,
+                            item.game_folder, osf_path, cluster_arg, sector_arg,
+                            threads_arg, retries_arg, rwait_arg, excl_hidden, img_override]
+            else:
+                cmd_list = [sys.executable, self._bat_path, out_path,
+                            item.game_folder, osf_path, cluster_arg, sector_arg,
+                            threads_arg, retries_arg, rwait_arg, excl_hidden, img_override]
+            cmd = ' '.join('"%s"' % arg for arg in cmd_list)
         else:
-            img_override = self._adv_img_size_var.get().strip()
-        cmd = ('"' + self._bat_path + '" "' + out_path + '" "'
-               + item.game_folder + '" "' + osf_path + '" "'
-               + cluster_arg + '" "' + sector_arg + '" "' + threads_arg
-               + '" "' + retries_arg + '" "' + rwait_arg + '" "' + excl_hidden
-               + '" "' + img_override + '"')
+            cmd = ('"' + self._bat_path + '" "' + out_path + '" "'
+                   + item.game_folder + '" "' + osf_path + '" "'
+                   + cluster_arg + '" "' + sector_arg + '" "' + threads_arg
+                   + '" "' + retries_arg + '" "' + rwait_arg + '" "' + excl_hidden
+                   + '" "' + img_override + '"')
 
         # Pre-flight: re-extract scripts if the temp dir was wiped.
         # Windows Storage Sense, antivirus quarantines, and long-running
@@ -8850,11 +8939,22 @@ class ExFATBuilder(_TK_BASE):
                 self._log('[INFO] Scripts re-extracted to: %s\n'
                           % os.path.dirname(self._bat_path))
                 # Rebuild the cmd string with the new path
-                cmd = ('"' + self._bat_path + '" "' + out_path + '" "'
-                       + item.game_folder + '" "' + osf_path + '" "'
-                       + cluster_arg + '" "' + sector_arg + '" "' + threads_arg
-                       + '" "' + retries_arg + '" "' + rwait_arg + '" "' + excl_hidden
-                       + '" "' + img_override + '"')
+                if sys.platform == 'darwin':
+                    if getattr(sys, 'frozen', False):
+                        cmd_list = [sys.executable, '--__make_image_mac__', out_path,
+                                    item.game_folder, osf_path, cluster_arg, sector_arg,
+                                    threads_arg, retries_arg, rwait_arg, excl_hidden, img_override]
+                    else:
+                        cmd_list = [sys.executable, self._bat_path, out_path,
+                                    item.game_folder, osf_path, cluster_arg, sector_arg,
+                                    threads_arg, retries_arg, rwait_arg, excl_hidden, img_override]
+                    cmd = ' '.join('"%s"' % arg for arg in cmd_list)
+                else:
+                    cmd = ('"' + self._bat_path + '" "' + out_path + '" "'
+                           + item.game_folder + '" "' + osf_path + '" "'
+                           + cluster_arg + '" "' + sector_arg + '" "' + threads_arg
+                           + '" "' + retries_arg + '" "' + rwait_arg + '" "' + excl_hidden
+                           + '" "' + img_override + '"')
         except Exception as _e:
             self._log('[ERROR] Could not re-extract scripts: %r\n' % _e)
             # Let the Popen below fail with its native error; we tried.
@@ -8964,28 +9064,48 @@ class ExFATBuilder(_TK_BASE):
                 # used to lose non-Latin path characters and produced
                 # blank "PS1 not found at:" messages with the path
                 # mangled away.
-                _enc = 'mbcs' if sys.platform.startswith('win') else 'utf-8'
-                try:
-                    proc = subprocess.Popen(
-                        cmd, shell=True, cwd=bat_dir,
-                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                        text=True, encoding=_enc, errors='replace',
-                        env=build_env,
-                        creationflags=_NO_WIN_FLAGS)
-                except OSError as _oe:
-                    # Most common cases:
-                    #   WinError 267: cwd doesn't exist (temp wiped)
-                    #   WinError 2:   bat itself doesn't exist
-                    #   WinError 5:   access denied (AV intervened)
-                    # Re-raise with enough context for the user dialog.
-                    raise RuntimeError(
-                        '%s\n\n'
-                        'Script path: %s\n'
-                        'Working dir: %s\n\n'
-                        'This usually means the temporary scripts folder '
-                        'was deleted by Windows or antivirus. '
-                        'Restarting the app will re-extract them.'
-                        % (_oe, self._bat_path, bat_dir))
+                if sys.platform == 'darwin':
+                    if getattr(sys, 'frozen', False):
+                        cmd_args = [sys.executable, '--__make_image_mac__', out_path,
+                                    item.game_folder, osf_path, cluster_arg, sector_arg,
+                                    threads_arg, retries_arg, rwait_arg, excl_hidden, img_override]
+                    else:
+                        cmd_args = [sys.executable, self._bat_path, out_path,
+                                    item.game_folder, osf_path, cluster_arg, sector_arg,
+                                    threads_arg, retries_arg, rwait_arg, excl_hidden, img_override]
+                    try:
+                        proc = subprocess.Popen(
+                            cmd_args, cwd=bat_dir,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, encoding='utf-8', errors='replace',
+                            env=build_env)
+                    except OSError as _oe:
+                        raise RuntimeError(
+                            '%s\n\nScript path: %s\nWorking dir: %s'
+                            % (_oe, self._bat_path, bat_dir))
+                else:
+                    _enc = 'mbcs' if sys.platform.startswith('win') else 'utf-8'
+                    try:
+                        proc = subprocess.Popen(
+                            cmd, shell=True, cwd=bat_dir,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, encoding=_enc, errors='replace',
+                            env=build_env,
+                            creationflags=_NO_WIN_FLAGS)
+                    except OSError as _oe:
+                        # Most common cases:
+                        #   WinError 267: cwd doesn't exist (temp wiped)
+                        #   WinError 2:   bat itself doesn't exist
+                        #   WinError 5:   access denied (AV intervened)
+                        # Re-raise with enough context for the user dialog.
+                        raise RuntimeError(
+                            '%s\n\n'
+                            'Script path: %s\n'
+                            'Working dir: %s\n\n'
+                            'This usually means the temporary scripts folder '
+                            'was deleted by Windows or antivirus. '
+                            'Restarting the app will re-extract them.'
+                            % (_oe, self._bat_path, bat_dir))
                 for line in proc.stdout:
                     self.after(0, self._handle_line, line)
                 proc.wait()
@@ -9016,18 +9136,22 @@ class ExFATBuilder(_TK_BASE):
                         pass
                     time.sleep(0.5)  # let the after() actually run
 
-                    letter = mounted.rstrip(':\\').upper()[:1]
-                    if letter:
+                    if sys.platform == 'darwin':
                         ok = self._dismount_drive_robust(
-                            letter, max_wait_seconds=30)
-                        if ok:
-                            self.after(0, self._log,
-                                '[DISMOUNT] ' + mounted +
-                                ' dismounted cleanly.\n')
-                        else:
-                            self.after(0, self._log,
-                                '[WARN] Drive ' + mounted +
-                                ' could not be dismounted after 30s. '
+                            mounted, max_wait_seconds=15)
+                    else:
+                        letter = mounted.rstrip(':\\').upper()[:1]
+                        ok = self._dismount_drive_robust(
+                            letter, max_wait_seconds=30) if letter else False
+
+                    if ok:
+                        self.after(0, self._log,
+                            '[DISMOUNT] ' + str(mounted) +
+                            ' dismounted cleanly.\n')
+                    else:
+                        self.after(0, self._log,
+                            '[WARN] Drive ' + str(mounted) +
+                            ' could not be dismounted after 30s. '
                                 'You can use the Force Dismount '
                                 'button to retry.\n')
 
@@ -9581,6 +9705,75 @@ class ExFATBuilder(_TK_BASE):
         self._elog_clear()
         self._elog('[EXTRACT] Image: ' + img_path + '\n')
         self._elog('[EXTRACT] Destination: ' + dest_folder + '\n\n')
+
+        if sys.platform == 'darwin':
+            start_time = [time.time()]
+            def mac_worker():
+                from ui.mac_compat import mount_image, unmount_image
+                mnt_dir = None
+                try:
+                    os.makedirs(dest_folder, exist_ok=True)
+                    self.after(0, self._elog, '[EXTRACT] Mounting image via hdiutil...\n')
+                    self.after(0, self._extract_status_var.set, 'Mounting image...')
+                    mnt_dir, dev = mount_image(img_path, read_only=True)
+                    self.after(0, self._elog, f'[EXTRACT] Mounted at {mnt_dir} ({dev})\n')
+                    self.after(0, self._extract_status_var.set, 'Scanning image...')
+
+                    items_to_copy = []
+                    total_bytes = 0
+                    for root, dirs, files in os.walk(mnt_dir):
+                        for fn in files:
+                            if fn.startswith('._') or fn == '.DS_Store':
+                                continue
+                            sp = os.path.join(root, fn)
+                            rp = os.path.relpath(sp, mnt_dir)
+                            try:
+                                sz = os.path.getsize(sp)
+                            except Exception:
+                                sz = 0
+                            items_to_copy.append((sp, rp, sz))
+                            total_bytes += sz
+
+                    self.after(0, self._elog, f'[EXTRACT] Total: {len(items_to_copy)} files (%.2f GB) to copy\n' % (total_bytes / (1024**3)))
+                    self.after(0, self._extract_status_var.set, 'Copying files...')
+
+                    copied_bytes = 0
+                    last_ui_update = 0.0
+                    for sp, rp, sz in items_to_copy:
+                        dp = os.path.join(dest_folder, rp)
+                        os.makedirs(os.path.dirname(dp), exist_ok=True)
+                        shutil.copy2(sp, dp)
+                        copied_bytes += sz
+                        now = time.time()
+                        if now - last_ui_update > 0.5 or copied_bytes == total_bytes:
+                            pct = int((copied_bytes / total_bytes * 100) if total_bytes else 100)
+                            el = max(0.001, now - start_time[0])
+                            rate = copied_bytes / el
+                            left = (total_bytes - copied_bytes) / rate if rate > 0 and copied_bytes < total_bytes else 0
+                            eta = f'~{int(left // 60)}m {int(left % 60):02d}s left' if left > 0 else 'Almost done'
+                            el_str = f'Elapsed: {int(el // 60)}m {int(el % 60):02d}s'
+                            status_txt = f'{el_str}  —  {eta}  ·  {int(rate / 1048576)} MB/s'
+                            self.after(0, self._update_extract_bar, pct)
+                            self.after(0, self._extract_eta_var.set, status_txt)
+                            self.after(0, self._elog, f'[EXTRACT] {rp}\n')
+                            last_ui_update = now
+
+                    self.after(0, self._update_extract_bar, 100)
+                    elapsed = time.time() - start_time[0]
+                    m, s = int(elapsed // 60), int(elapsed % 60)
+                    self.after(0, self._extract_done, True, dest_folder, m, s)
+                except Exception as e:
+                    self.after(0, self._extract_done, False, str(e), 0, 0)
+                finally:
+                    if mnt_dir:
+                        self.after(0, self._elog, '\n[EXTRACT] Dismounting...\n')
+                        try:
+                            unmount_image(mnt_dir)
+                        except Exception:
+                            pass
+
+            threading.Thread(target=mac_worker, daemon=True).start()
+            return
 
         # Find OSFMount — defer to the canonical _find_osfmount() so
         # Extract honours the path saved in Settings, registry entries,
@@ -10766,9 +10959,15 @@ class ExFATBuilder(_TK_BASE):
             pass
 
     def _open_folder(self, path):
-        """Open a folder in Windows Explorer. No shell, no quoting issues."""
+        """Open a folder in Finder / Explorer. No shell, no quoting issues."""
         if not path:
             return
+        if sys.platform == 'darwin':
+            try:
+                subprocess.Popen(['open', path])
+                return
+            except Exception:
+                pass
         try:
             os.startfile(path)
         except Exception:
@@ -16951,6 +17150,16 @@ class ExFATBuilder(_TK_BASE):
             self._osf_found_var.set('\u2717 Not found — use Browse to locate it manually')
 
     def _refresh_osf_status(self):
+        if sys.platform == 'darwin':
+            self._osf_found_var.set('\u2713 macOS Native Engine: /usr/bin/hdiutil (Built-in)')
+            try:
+                for w in self.winfo_children():
+                    if isinstance(w, tk.Frame) and w.cget('bg') == '#3a1500':
+                        w.pack_forget()
+            except Exception:
+                pass
+            return
+
         found = self._find_osfmount()
         # Auto-heal: if detection found a real binary, but the saved
         # path either doesn't match it or doesn't exist on disk, update
@@ -19944,6 +20153,13 @@ class ExFATBuilder(_TK_BASE):
             return False, 'sanity check errored: ' + str(e)
 
     def _verify_image(self, out_path, src_folder):
+        if sys.platform == 'darwin':
+            try:
+                from ui.mac_compat import verify_exfat_image
+                ok, msg = verify_exfat_image(out_path)
+                return ok, msg
+            except Exception as e:
+                return False, 'macOS verify failed: ' + str(e)
         osf = self._find_osfmount()
         if not osf:
             return True, 'OSFMount not found — skipping verify'
@@ -21571,7 +21787,8 @@ class ExFATBuilder(_TK_BASE):
             self._drive_poll_id = self.after(2000, self._poll_drive)
             return
         try:
-            usage = shutil.disk_usage(self._mounted_drive + '\\')
+            _poll_target = self._mounted_drive if os.path.isabs(self._mounted_drive) else (self._mounted_drive + '\\')
+            usage = shutil.disk_usage(_poll_target)
             free_gb  = usage.free  / (1024 ** 3)
             image_gb = usage.total / (1024 ** 3)   # full image CAPACITY
 
@@ -23171,6 +23388,14 @@ if __name__ == '__main__':
             sys.exit(3)
         _rc = _mkpfs_main(sys.argv[2:])
         sys.exit(_rc if isinstance(_rc, int) else 0)
+
+    if len(sys.argv) >= 2 and sys.argv[1] == '--__make_image_mac__':
+        try:
+            from make_image_mac import main as _mac_builder_main
+            sys.exit(_mac_builder_main(sys.argv[2:]))
+        except Exception as _e:
+            sys.stderr.write('make_image_mac failed: %s\n' % _e)
+            sys.exit(3)
 
     def _crash_handler(exc_type, exc_value, exc_tb):
         import traceback

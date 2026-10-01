@@ -505,6 +505,15 @@ def build_convert_tab(parent, app):
             # Find a free drive letter
             parent.after(0, prog.set_stage, 'mount',
                 'Finding free drive letter...')
+            if sys.platform != 'win32':
+                _log('Convert requires Windows Dokan/UFS2 tools.')
+                parent.after(0, prog.close)
+                parent.after(0, lambda: _set_busy_e2f(False, 'Windows only.'))
+                parent.after(0, lambda: messagebox.showinfo(
+                    'Feature Unavailable on macOS',
+                    'UFS2 conversion (.ffpkg) requires Windows UFS2Tool and Dokan.\n'
+                    'Native macOS exFAT building, mounting, and extraction are supported.'))
+                return
             import ctypes as _ct
             used_mask = _ct.windll.kernel32.GetLogicalDrives()
             mount_letter = None
@@ -1100,6 +1109,8 @@ def build_convert_tab(parent, app):
                         'Failed to allocate output file: ' + str(e))
 
                 # Pick a free drive letter
+                if sys.platform != 'win32':
+                    raise RuntimeError('Conversion from ffpkg to exFAT requires Windows Dokan/UFS2 tools.')
                 used_mask = _ct.windll.kernel32.GetLogicalDrives()
                 mount_letter = None
                 for code in range(ord('G'), ord('Z') + 1):

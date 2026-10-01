@@ -270,6 +270,14 @@ def _build_osfmount(body, app):
 
     def _refresh_summary(*_a):
         import time as _t
+        if sys.platform == 'darwin':
+            s['status'](_('Native (macOS)'), 'ok')
+            s['version']('Apple hdiutil')
+            s['arch'](platform.machine())
+            s['path']('/usr/bin/hdiutil')
+            s['checked'](_t.strftime('%d/%m/%Y %H:%M'))
+            app._osf_found_var.set('✓ Native macOS disk image engine active (no OSFMount required)')
+            return
         try:
             path = (app._osfmount_path_var.get() or '').strip()
         except Exception:

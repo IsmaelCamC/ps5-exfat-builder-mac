@@ -2731,6 +2731,9 @@ def _bp_extract_exfat_to_temp(app, img_path):
     """Mount `img_path` read-only via OSFMount, copy its tree into a
     temp dir, then dismount. Returns (temp_dir, cleanup_fn).
     """
+    if sys.platform == 'darwin':
+        from ui.mac_compat import mount_exfat_tree_to_tmp
+        return mount_exfat_tree_to_tmp(img_path)
     import shutil as _sh
     import ctypes as _ct
     if not os.path.isfile(img_path):

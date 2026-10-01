@@ -1510,6 +1510,9 @@ def _bp_ffpkg_walk(exe, img, fs_dir, local_dir, stats, _depth=0):
 def _bp_exfat_to_temp(app, img_path):
     """Mount `img_path` read-only via OSFMount, copy its tree into a
     temp dir, then dismount. Returns (temp_dir, cleanup_fn)."""
+    if sys.platform == 'darwin':
+        from ui.mac_compat import mount_exfat_tree_to_tmp
+        return mount_exfat_tree_to_tmp(img_path)
     import shutil as _sh
     import ctypes as _ct
     import time as _t2
