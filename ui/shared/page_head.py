@@ -52,6 +52,8 @@ def make_themed_button(parent, text, command, kind='primary',
     schemes = {
         'primary':      (COLORS['accent'],  COLORS['fg_0'],
                          COLORS['accent_hi'], COLORS['fg_0']),
+        'accent':       (COLORS['accent'],  COLORS['fg_0'],
+                         COLORS['accent_hi'], COLORS['fg_0']),
         # 'success' is the secondary action colour — muted teal that
         # sits next to the brand purple without clashing. Replaces the
         # old bright mint that looked like a stoplight.

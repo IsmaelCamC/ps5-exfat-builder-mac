@@ -31,6 +31,57 @@ def patch_system_for_mac():
                 pass
         os.startfile = _startfile
 
+    # 3. Patch tkinter.Button on macOS so dark theme colors (bg/fg) are honored
+    try:
+        import tkinter
+        from tkmacosx import Button as _MacButton
+
+        class PatchedMacButton(_MacButton):
+            def __init__(self, master=None, cnf={}, **kw):
+                cnf_dict = dict(cnf) if cnf else {}
+                cnf_dict.update(kw)
+                if 'highlightbackground' in cnf_dict:
+                    cnf_dict.setdefault('bordercolor', cnf_dict['highlightbackground'])
+                if 'highlightthickness' in cnf_dict:
+                    cnf_dict.setdefault('borderwidth', cnf_dict['highlightthickness'])
+                    if cnf_dict['highlightthickness'] > 0:
+                        cnf_dict.setdefault('borderless', 0)
+                if cnf_dict.get('relief') == 'flat' or cnf_dict.get('bd') == 0 or cnf_dict.get('borderwidth') == 0:
+                    if 'borderless' not in cnf_dict and 'bordercolor' not in cnf_dict:
+                        cnf_dict['borderless'] = 1
+                super().__init__(master, **cnf_dict)
+
+            def configure(self, cnf=None, **kw):
+                cnf_dict = dict(cnf) if cnf else {}
+                cnf_dict.update(kw)
+                if 'highlightbackground' in cnf_dict:
+                    cnf_dict.setdefault('bordercolor', cnf_dict['highlightbackground'])
+                if 'highlightthickness' in cnf_dict:
+                    cnf_dict.setdefault('borderwidth', cnf_dict['highlightthickness'])
+                    if cnf_dict['highlightthickness'] > 0:
+                        cnf_dict.setdefault('borderless', 0)
+                return super().configure(**cnf_dict)
+
+            config = configure
+
+        tkinter.Button = PatchedMacButton
+        import tkinter as _tk
+        _tk.Button = PatchedMacButton
+    except Exception:
+        pass
+
+def notify_macos(title: str, message: str):
+    """Trigger a native macOS desktop notification."""
+    if not IS_MACOS:
+        return
+    try:
+        clean_title = title.replace('"', '\\"')
+        clean_msg = message.replace('"', '\\"')
+        cmd = ['osascript', '-e', f'display notification "{clean_msg}" with title "{clean_title}"']
+        subprocess.Popen(cmd)
+    except Exception:
+        pass
+
 def mount_image(img_path: str, read_only: bool = True, mountpoint: str = None) -> tuple[str, str]:
     """
     Mount a raw .exfat disk image using native macOS DiskImage framework.

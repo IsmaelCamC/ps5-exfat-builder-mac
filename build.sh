@@ -24,7 +24,8 @@ $PYTHON_BIN -m pip install --upgrade \
     tkinterdnd2 \
     psutil \
     "mkpfs==0.0.8" \
-    cryptography
+    cryptography \
+    tkmacosx
 
 ICON_ARG=""
 if [ -f "assets/AppIcon.icns" ]; then
@@ -61,6 +62,8 @@ $PYTHON_BIN -m PyInstaller \
     --hidden-import cryptography.hazmat.backends \
     --hidden-import cryptography.hazmat.backends.openssl \
     --hidden-import cryptography.hazmat.backends.openssl.backend \
+    --hidden-import tkmacosx \
+    --collect-all tkmacosx \
     --collect-all mkpfs \
     --collect-all cryptography \
     --collect-all tkinterdnd2 \

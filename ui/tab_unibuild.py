@@ -2795,6 +2795,21 @@ def build_unibuild_tab(parent, app):
                '%d job%s finished' % (done, '' if done == 1 else 's'),
                '%d failed' % failed, ok=(failed == 0))
 
+        if sys.platform == 'darwin':
+            from ui.mac_compat import notify_macos
+            notify_macos('exFAT Image Builder', 'Build complete! %d job(s) finished.' % done)
+        try:
+            if done > 0 and failed == 0:
+                app.after(100, lambda: messagebox.showinfo(
+                    'Build Complete',
+                    '%d image(s) built successfully!\n\nAll files have been verified and written to disk.' % done))
+            elif failed > 0:
+                app.after(100, lambda: messagebox.showwarning(
+                    'Build Finished with Errors',
+                    '%d job(s) finished, but %d failed.\n\nPlease check the output log for details.' % (done, failed)))
+        except Exception:
+            pass
+
     def _uq_build_all():
         if uq_state['running']:
             return
