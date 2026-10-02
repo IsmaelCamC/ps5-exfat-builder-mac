@@ -1,11 +1,11 @@
 # 🎮 exFAT Image Builder
 
-**The Ultimate Windows Toolkit for Building, Editing & Backporting PS5
+**The Ultimate Windows + macOS Toolkit for Building, Editing & Backporting PS5
 Game Images**
 
 Build • Edit • Convert • Backport • Deploy
 
-![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-blue)
+![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11%20%7C%20macOS-blue)
 ![Python](https://img.shields.io/badge/Python-3.11-yellow)
 ![License](https://img.shields.io/github/license/kerrdec97/ps5-exfat-builder)
 ![Release](https://img.shields.io/github/v/release/kerrdec97/ps5-exfat-builder)
@@ -16,7 +16,7 @@ Build • Edit • Convert • Backport • Deploy
 
 ## 🚀 Overview
 
-**exFAT Image Builder** is an all-in-one Windows application for
+**exFAT Image Builder** is an all-in-one application for
 creating, editing, converting and managing mountable PS5 game images
 from your own game dumps.
 
@@ -26,6 +26,11 @@ FFPFSC**, creating an **FFPKG**, applying **backports**, managing
 from one modern interface.
 
 Designed for speed, reliability and ease of use.
+
+> ✅ **macOS support available**
+>
+> This repository includes native macOS support for exFAT image creation
+> and packaging workflows.
 
 > ⚠️ **Homebrew & Personal Backup Tool**
 >
@@ -98,7 +103,9 @@ Supports **17 interface languages**, maintained by the community.
 
 # ⚡ Quick Start
 
-1.  Install Windows 10/11, OSFMount and (.NET 8 for FFPKG).
+1.  Install:
+    - Windows 10/11 + OSFMount (+ .NET 8 for FFPKG), or
+    - macOS (native image engine included in this repo).
 2.  Open the **Build** tab.
 3.  Select your PS5 game dump.
 4.  Choose **exFAT**, **FFPKG** or **FFPFSC**.
@@ -171,5 +178,4 @@ If you enjoy exFAT Image Builder:
 -   ❤️ Support the PS5 Homebrew community
 
 Made with ☕ and a passion for PS5 homebrew.
-
 
