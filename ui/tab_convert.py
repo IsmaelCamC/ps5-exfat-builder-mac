@@ -33,6 +33,7 @@ the dump in, then dismounts.
 """
 
 import os
+import sys
 import re
 import subprocess
 import threading
@@ -90,6 +91,15 @@ def build_convert_tab(parent, app):
     f2e_outdir = tk.StringVar()
     f2e_name   = tk.StringVar()
     f2e_status_var = tk.StringVar(value='Idle.')
+    p2f_src    = tk.StringVar()
+    p2f_outdir = tk.StringVar()
+    p2f_name   = tk.StringVar()
+    p2f_status_var = tk.StringVar(value='Idle.')
+    p2f_comp_var = tk.StringVar(value='6')
+    p2f_temp_var = tk.StringVar()
+    p2f_cleanup_var = tk.BooleanVar(value=True)
+    p2f_receipt_var = tk.BooleanVar(value=True)
+    p2f_info_var = tk.StringVar(value='')
     # Shared: only one conversion runs at a time.
     state = {'busy': False}
     # Back-compat alias for old code below — points at whichever card
@@ -115,15 +125,12 @@ def build_convert_tab(parent, app):
 
     # ── Page head with badge ──
     head = page_head(inner, '\U0001f4bf',
-                     'Convert images',
-                     'Convert between .exfat and .ffpkg.')
+                     'Convert images & packages',
+                     'Convert between .exfat, .ffpkg and PS5 .pkg (fPKG \u2192 ffpfsc).')
     head.pack(fill='x', padx=24, pady=(14, 12))
 
-    # v3.6.3: cross-reference so users wanting a compressed .ffpfsc don't get
-    # stuck here (Convert only does exFAT <-> ffpkg).
     tk.Label(inner,
-             text='Need a compressed .ffpfsc image? Use Build \u2192 PFS '
-                  '\u2192 Existing Image.',
+             text='Convert existing images (.exfat \u2194 .ffpkg) or convert a PS5 fPKG (.pkg) directly to a compressed .ffpfsc for ShadowMount (PS-Neighborhood).',
              font=FONTS['meta'], bg=COLORS['bg_1'], fg=COLORS['fg_4'],
              anchor='w').pack(fill='x', padx=24, pady=(0, 8))
 
@@ -142,8 +149,8 @@ def build_convert_tab(parent, app):
 
     # ── Info banner ──
     banner = info_banner(inner,
-        'Conversion mounts the source via OSFMount, runs UFS2Tool '
-        'newfs against the mount point, then unmounts. Output goes '
+        'Conversion mounts or extracts the source image/package, generates '
+        'the destination format, and verifies integrity. Output goes '
         'to the global OUTPUT LOG (click at the bottom to expand).')
     banner.pack(fill='x', padx=24, pady=(0, 14))
 
@@ -179,6 +186,35 @@ def build_convert_tab(parent, app):
             if not hero_packed['on']:
                 hero.pack(fill='x', padx=24, pady=(0, 14), after=banner)
                 hero_packed['on'] = True
+
+            if path.lower().endswith('.pkg'):
+                from ui.ps5_pkg_extractor import inspect_ps5_pkg
+                pkg_info = inspect_ps5_pkg(path)
+                if pkg_info.get('valid'):
+                    title = pkg_info.get('title_name') or pkg_info.get('title_id') or os.path.splitext(os.path.basename(path))[0]
+                    sub = f"{pkg_info.get('title_id')} \u00b7 v{pkg_info.get('version')} \u00b7 {pkg_info.get('kind')} ({pkg_info.get('signing')})"
+                    hero.set_title(title, sub)
+                    hero.set_path(path)
+                    hero.set_stat('src', src_fmt)
+                    hero.set_stat('dst', dst_fmt)
+                    hero.set_stat('size', _humansize(pkg_info.get('size', 0)))
+                    conv = pkg_info.get('shadow_convertible', False)
+                    hero.set_stat('status', 'Ready' if conv else 'Incompatible', warn=not conv)
+                    hero.set_badge('READY TO CONVERT' if conv else 'INCOMPATIBLE', 'ready' if conv else 'warn')
+                    if pkg_info.get('icon_bytes'):
+                        try:
+                            import io
+                            from PIL import Image, ImageTk
+                            pil_im = Image.open(io.BytesIO(pkg_info['icon_bytes'])).convert('RGBA')
+                            pil_im = pil_im.resize((hero._cover_size, hero._cover_size), Image.Resampling.LANCZOS)
+                            hero._cover_img = ImageTk.PhotoImage(pil_im)
+                            hero._cover_lbl.config(image=hero._cover_img, text='')
+                        except Exception:
+                            hero.reset_cover()
+                    else:
+                        hero.reset_cover()
+                    return
+
             from ui.tab_ps5_mgr import parse_meta_from_filename
             gid, ver, disp = parse_meta_from_filename(
                 os.path.basename(path))
@@ -309,16 +345,20 @@ def build_convert_tab(parent, app):
                 pbar.start(10)
                 e2f_status_var.set(label or 'Working...')
                 convert_btn.config(state='disabled', cursor='watch')
-                # Also lock the other card's button so the user can't
+                # Also lock the other cards' buttons so the user can't
                 # try to launch a concurrent run.
                 if 'f2e_btn' in state and state['f2e_btn']:
                     state['f2e_btn'].config(state='disabled')
+                if 'p2f_btn' in state and state['p2f_btn']:
+                    state['p2f_btn'].config(state='disabled')
             else:
                 pbar.stop()
                 e2f_status_var.set(label or 'Idle.')
                 convert_btn.config(state='normal', cursor='hand2')
                 if 'f2e_btn' in state and state['f2e_btn']:
                     state['f2e_btn'].config(state='normal')
+                if 'p2f_btn' in state and state['p2f_btn']:
+                    state['p2f_btn'].config(state='normal')
         except Exception:
             pass
 
@@ -805,6 +845,11 @@ def build_convert_tab(parent, app):
                     convert_btn.config(state='disabled')
                 except Exception:
                     pass
+                if 'p2f_btn' in state and state['p2f_btn']:
+                    try:
+                        state['p2f_btn'].config(state='disabled')
+                    except Exception:
+                        pass
             else:
                 f2e_pbar.stop()
                 f2e_status_var.set(label or 'Idle.')
@@ -813,6 +858,11 @@ def build_convert_tab(parent, app):
                     convert_btn.config(state='normal')
                 except Exception:
                     pass
+                if 'p2f_btn' in state and state['p2f_btn']:
+                    try:
+                        state['p2f_btn'].config(state='normal')
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -1287,5 +1337,326 @@ def build_convert_tab(parent, app):
                     pass
 
         threading.Thread(target=worker, daemon=True).start()
+
+    # ── Card 3: fPKG → ffpfsc (ShadowMount / PS-Neighborhood) ─────────
+    p2f_card = tk.Frame(inner, bg=COLORS['bg_2'],
+                         highlightbackground=COLORS['border_2'],
+                         highlightthickness=1)
+    p2f_card.pack(fill='x', padx=24, pady=(0, 24))
+
+    # Card head
+    p2f_chead = tk.Frame(p2f_card, bg=COLORS['bg_2'])
+    p2f_chead.pack(fill='x', padx=24, pady=(18, 14))
+
+    # Icon tile
+    p2f_ico = tk.Label(p2f_chead, text='\U0001f4e6',
+                       font=(FONTS['h2'][0], 13),
+                       bg=COLORS['accent_08'], fg=COLORS['accent'],
+                       width=2, padx=4, pady=2)
+    p2f_ico.pack(side='left', padx=(0, 12))
+
+    _flow_chips(p2f_chead, '.pkg', '.ffpfsc')
+
+    p2f_title_col = tk.Frame(p2f_chead, bg=COLORS['bg_2'])
+    p2f_title_col.pack(side='left', fill='x', expand=True)
+    tk.Label(p2f_title_col, text='fPKG \u2192 ffpfsc (ShadowMount)',
+             font=(FONTS['h3'][0], 12, 'bold'),
+             bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w'
+             ).pack(fill='x')
+    tk.Label(p2f_title_col,
+             text='Convert a PS5 debug base game package (.pkg) to .ffpfsc for PS-Neighborhood.',
+             font=FONTS['meta'],
+             bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w'
+             ).pack(fill='x', pady=(2, 0))
+
+    # Hairline under head
+    tk.Frame(p2f_card, bg=COLORS['border_2'], height=1).pack(fill='x')
+
+    # Card body
+    p2f_body = tk.Frame(p2f_card, bg=COLORS['bg_2'])
+    p2f_body.pack(fill='x', padx=24, pady=(4, 18))
+
+    def _p2f_browse_src():
+        p = filedialog.askopenfilename(
+            title='Select PS5 fPKG (.pkg)',
+            filetypes=[('PS5 Packages', '*.pkg'),
+                       ('All files', '*.*')])
+        if p:
+            p2f_src.set(p)
+
+    def _p2f_browse_outdir():
+        p = filedialog.askdirectory(title='Select output folder')
+        if p:
+            p2f_outdir.set(p)
+
+    field_block(p2f_body, 'Source .pkg',
+                var=p2f_src, on_browse=_p2f_browse_src,
+                hint='PS5 debug base game package to convert')
+    field_block(p2f_body, 'Output folder',
+                var=p2f_outdir, on_browse=_p2f_browse_outdir,
+                hint='where the .ffpfsc image and receipt will be saved')
+    field_block(p2f_body, 'Output name',
+                var=p2f_name,
+                hint='auto-filled with <titleId>.ffpfsc if blank')
+
+    # Package inspection banner / preview inside the card
+    p2f_info_frame = tk.Frame(p2f_body, bg=COLORS['bg_3'], bd=0, padx=12, pady=10)
+    p2f_info_lbl = tk.Label(p2f_info_frame, textvariable=p2f_info_var,
+                            font=FONTS['meta'], bg=COLORS['bg_3'], fg=COLORS['fg_2'],
+                            justify='left', anchor='w')
+    p2f_info_lbl.pack(fill='x')
+
+    # Options row
+    opts_frame = tk.Frame(p2f_body, bg=COLORS['bg_2'])
+    opts_frame.pack(fill='x', pady=(12, 4))
+
+    # Compression level
+    comp_col = tk.Frame(opts_frame, bg=COLORS['bg_2'])
+    comp_col.pack(side='left', padx=(0, 24))
+    tk.Label(comp_col, text='Compression:', font=FONTS['meta'],
+             bg=COLORS['bg_2'], fg=COLORS['fg_3']).pack(side='left', padx=(0, 6))
+    comp_cb = ttk.Combobox(comp_col, textvariable=p2f_comp_var,
+                           values=['1 (Fast)', '3 (Standard)', '6 (Default)', '9 (Max)'],
+                           state='readonly', width=14)
+    comp_cb.pack(side='left')
+    if not p2f_comp_var.get() or p2f_comp_var.get() == '6':
+        comp_cb.set('6 (Default)')
+
+    # Checkboxes
+    chk_col = tk.Frame(opts_frame, bg=COLORS['bg_2'])
+    chk_col.pack(side='left', fill='x', expand=True)
+
+    c1 = tk.Checkbutton(chk_col, text='Auto-clean temp files (keep original .pkg)',
+                        variable=p2f_cleanup_var,
+                        font=FONTS['meta'], bg=COLORS['bg_2'], fg=COLORS['fg_1'],
+                        activebackground=COLORS['bg_2'], selectcolor=COLORS['bg_3'])
+    c1.pack(side='left', padx=(0, 16))
+
+    c2 = tk.Checkbutton(chk_col, text='Save .verified.json receipt',
+                        variable=p2f_receipt_var,
+                        font=FONTS['meta'], bg=COLORS['bg_2'], fg=COLORS['fg_1'],
+                        activebackground=COLORS['bg_2'], selectcolor=COLORS['bg_3'])
+    c2.pack(side='left')
+
+    def _on_p2f_src(*_a):
+        src_path = p2f_src.get().strip()
+        if not src_path or not os.path.isfile(src_path):
+            p2f_info_frame.pack_forget()
+            p2f_info_var.set('')
+            _update_hero('', 'fPKG', 'ffpfsc')
+            return
+
+        if not p2f_outdir.get().strip():
+            p2f_outdir.set(os.path.dirname(src_path))
+
+        try:
+            from ui.ps5_pkg_extractor import inspect_ps5_pkg
+            info = inspect_ps5_pkg(src_path)
+            if info.get('valid'):
+                tid = info.get('title_id', 'PPSA00000')
+                if not p2f_name.get().strip():
+                    p2f_name.set(f"{tid}.ffpfsc")
+                conv = info.get('shadow_convertible', False)
+                status_txt = '\u2713 Ready for ShadowMount' if conv else '\u26a0 Incompatible package'
+                p2f_info_var.set(
+                    f"Title: {info.get('title_name', 'Unknown')}  \u2502  "
+                    f"ID: {tid}  \u2502  "
+                    f"Version: {info.get('version', '01.00')}  \u2502  "
+                    f"Signing: {info.get('signing', 'Debug')}  \u2502  "
+                    f"Status: {status_txt}"
+                )
+                if not p2f_info_frame.winfo_ismapped():
+                    p2f_info_frame.pack(fill='x', pady=(6, 8), before=opts_frame)
+            else:
+                p2f_info_var.set(f"\u26a0 {info.get('error', 'Invalid package')}")
+                if not p2f_info_frame.winfo_ismapped():
+                    p2f_info_frame.pack(fill='x', pady=(6, 8), before=opts_frame)
+        except Exception as e:
+            p2f_info_var.set(f"Inspection error: {e}")
+            if not p2f_info_frame.winfo_ismapped():
+                p2f_info_frame.pack(fill='x', pady=(6, 8), before=opts_frame)
+
+        _update_hero(src_path, 'fPKG (.pkg)', 'ShadowMount (.ffpfsc)')
+
+    p2f_src.trace_add('write', _on_p2f_src)
+
+    # Action row
+    p2f_action_row = tk.Frame(p2f_body, bg=COLORS['bg_2'])
+    p2f_action_row.pack(fill='x', pady=(18, 0))
+
+    p2f_btn = make_themed_button(
+        p2f_action_row,
+        text='Convert to ffpfsc',
+        command=lambda: _do_fpkg_to_ffpfsc(),
+        kind='success',
+        icon='\u25b6',
+        font_size=10, padx=18, pady=9)
+    p2f_btn.pack(side='left')
+    state['p2f_btn'] = p2f_btn
+
+    tk.Label(p2f_action_row, textvariable=p2f_status_var,
+             font=FONTS['mono_sm'],
+             bg=COLORS['bg_2'], fg=COLORS['fg_4'],
+             anchor='w').pack(side='left', padx=(16, 0))
+
+    p2f_pbar_wrap = tk.Frame(p2f_action_row, bg=COLORS['bg_2'])
+    p2f_pbar_wrap.pack(side='right', fill='x', expand=True, padx=(16, 0))
+    p2f_pbar = ttk.Progressbar(p2f_pbar_wrap, mode='indeterminate', length=200)
+    p2f_pbar.pack(fill='x')
+
+    def _set_busy_p2f(b, label=''):
+        state['busy'] = b
+        try:
+            if b:
+                p2f_pbar.start(10)
+                p2f_status_var.set(label or 'Working...')
+                p2f_btn.config(state='disabled', cursor='watch')
+                try:
+                    convert_btn.config(state='disabled')
+                except Exception:
+                    pass
+                if 'f2e_btn' in state and state['f2e_btn']:
+                    try:
+                        state['f2e_btn'].config(state='disabled')
+                    except Exception:
+                        pass
+            else:
+                p2f_pbar.stop()
+                p2f_status_var.set(label or 'Idle.')
+                p2f_btn.config(state='normal', cursor='hand2')
+                try:
+                    convert_btn.config(state='normal')
+                except Exception:
+                    pass
+                if 'f2e_btn' in state and state['f2e_btn']:
+                    try:
+                        state['f2e_btn'].config(state='normal')
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # ── fPKG → ffpfsc worker ─────────────────────────────────────────
+    def _do_fpkg_to_ffpfsc():
+        if state['busy']:
+            return
+        src = p2f_src.get().strip()
+        outdir = p2f_outdir.get().strip()
+        name = p2f_name.get().strip()
+        if not src or not os.path.isfile(src):
+            messagebox.showerror('Source missing',
+                'Pick a valid PS5 fPKG (.pkg) source file.')
+            return
+        if not outdir or not os.path.isdir(outdir):
+            messagebox.showerror('Output folder missing',
+                'Pick an output folder.')
+            return
+        if not name:
+            base = os.path.splitext(os.path.basename(src))[0]
+            name = base + '.ffpfsc'
+        if not name.lower().endswith('.ffpfsc'):
+            name = name + '.ffpfsc'
+
+        out_path = os.path.join(outdir, name)
+        if os.path.exists(out_path):
+            if not messagebox.askyesno('Overwrite',
+                    out_path + '\n\nalready exists. Overwrite?'):
+                return
+            try:
+                os.remove(out_path)
+            except Exception as e:
+                _log('Could not remove existing destination: ' + str(e))
+                return
+
+        comp_str = p2f_comp_var.get().strip()
+        try:
+            comp_lvl = int(comp_str.split()[0])
+        except Exception:
+            comp_lvl = 6
+
+        auto_cleanup = p2f_cleanup_var.get()
+        save_receipt = p2f_receipt_var.get()
+        custom_temp = p2f_temp_var.get().strip() or getattr(app, '_settings', {}).get('temp_dir') or None
+
+        from ui.tab_ffpkg_edit import _RebuildProgress
+        prog = _RebuildProgress(parent, 'Converting fPKG \u2192 ffpfsc (ShadowMount)',
+            weights={
+                'inspect':  (0,   5),
+                'extract':  (5,  55),
+                'build':    (55, 75),
+                'compress': (75, 92),
+                'verify':   (92, 98),
+                'cleanup':  (98, 100),
+            },
+            initial_stage='inspect')
+
+        _set_busy_p2f(True, 'Starting conversion...')
+
+        def worker():
+            try:
+                from ui.ps5_pkg_extractor import convert_fpkg_to_ffpfsc
+
+                def _ui_progress(stage_msg, done, total):
+                    pct = (done / max(1, total)) * 100.0
+                    lmsg = stage_msg.lower()
+                    if 'extract' in lmsg:
+                        prog_stage = 'extract'
+                    elif 'intermediate' in lmsg or 'filesystem' in lmsg or 'exfat' in lmsg:
+                        prog_stage = 'build'
+                    elif 'compress' in lmsg or 'mkpfs' in lmsg:
+                        prog_stage = 'compress'
+                    elif 'verify' in lmsg or 'checksum' in lmsg:
+                        prog_stage = 'verify'
+                    elif 'clean' in lmsg:
+                        prog_stage = 'cleanup'
+                    else:
+                        prog_stage = 'inspect'
+
+                    parent.after(0, prog.set_stage, prog_stage, stage_msg)
+                    parent.after(0, prog.set_stage_progress, pct, f"{stage_msg} ({done}%)")
+
+                report = convert_fpkg_to_ffpfsc(
+                    pkg_path=src,
+                    output_dir=outdir,
+                    custom_name=name,
+                    temp_dir=custom_temp,
+                    compression_level=comp_lvl,
+                    auto_cleanup=auto_cleanup,
+                    save_receipt=save_receipt,
+                    external_converter=getattr(app, '_settings', {}).get('neighborhood_converter') or None,
+                    log_cb=_log,
+                    progress_cb=_ui_progress
+                )
+
+                parent.after(0, prog.close)
+                parent.after(0, lambda: _set_busy_p2f(False, 'Done \u2713'))
+                parent.after(0, lambda: _update_hero(out_path, 'fPKG (.pkg)', 'ShadowMount (.ffpfsc)'))
+
+                rep_msg = (
+                    f"Converted fPKG to ShadowMount .ffpfsc successfully!\n\n"
+                    f"Title ID: {report.get('titleId')}\n"
+                    f"Output: {os.path.basename(out_path)}\n"
+                    f"Image Size: {report.get('imageSize', 0) / (1024**3):.2f} GB\n"
+                    f"SHA-256: {report.get('imageSha256', '')[:16]}...\n"
+                )
+                if save_receipt:
+                    rep_msg += f"\nVerification receipt saved to:\n{os.path.basename(out_path)}.verified.json"
+
+                parent.after(0, lambda: messagebox.showinfo('fPKG Converted Successfully', rep_msg))
+
+                try:
+                    from ui.release_notes import note_successful_operation
+                    note_successful_operation(app, 'Convert')
+                except Exception:
+                    pass
+
+            except Exception as e:
+                _log('fPKG \u2192 ffpfsc failed: ' + str(e))
+                parent.after(0, prog.close)
+                parent.after(0, lambda e=e: _set_busy_p2f(False, 'Failed.'))
+                parent.after(0, lambda e=e: messagebox.showerror('fPKG \u2192 ffpfsc Failed', str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
 
 
