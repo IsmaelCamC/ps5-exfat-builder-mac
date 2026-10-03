@@ -95,6 +95,7 @@ def build_convert_tab(parent, app):
     p2f_outdir = tk.StringVar()
     p2f_name   = tk.StringVar()
     p2f_status_var = tk.StringVar(value='Idle.')
+    p2f_dst_fmt    = tk.StringVar(value='ffpfsc')
     p2f_comp_var = tk.StringVar(value='6')
     p2f_temp_var = tk.StringVar()
     p2f_cleanup_var = tk.BooleanVar(value=True)
@@ -1355,16 +1356,16 @@ def build_convert_tab(parent, app):
                        width=2, padx=4, pady=2)
     p2f_ico.pack(side='left', padx=(0, 12))
 
-    _flow_chips(p2f_chead, '.pkg', '.ffpfsc')
+    _flow_chips(p2f_chead, '.pkg', '.ffpfsc / .exfat')
 
     p2f_title_col = tk.Frame(p2f_chead, bg=COLORS['bg_2'])
     p2f_title_col.pack(side='left', fill='x', expand=True)
-    tk.Label(p2f_title_col, text='fPKG \u2192 ffpfsc (ShadowMount)',
+    tk.Label(p2f_title_col, text='fPKG \u2192 ffpfsc / .exfat (ShadowMount)',
              font=(FONTS['h3'][0], 12, 'bold'),
              bg=COLORS['bg_2'], fg=COLORS['fg_0'], anchor='w'
              ).pack(fill='x')
     tk.Label(p2f_title_col,
-             text='Convert a PS5 debug base game package (.pkg) to .ffpfsc for PS-Neighborhood.',
+             text='Convert a PS5 debug base game (.pkg) to .ffpfsc (compressed) or direct .exfat (layers=1).',
              font=FONTS['meta'],
              bg=COLORS['bg_2'], fg=COLORS['fg_4'], anchor='w'
              ).pack(fill='x', pady=(2, 0))
@@ -1394,10 +1395,10 @@ def build_convert_tab(parent, app):
                 hint='PS5 debug base game package to convert')
     field_block(p2f_body, 'Output folder',
                 var=p2f_outdir, on_browse=_p2f_browse_outdir,
-                hint='where the .ffpfsc image and receipt will be saved')
+                hint='where the image and receipt will be saved')
     field_block(p2f_body, 'Output name',
                 var=p2f_name,
-                hint='auto-filled with <titleId>.ffpfsc if blank')
+                hint='auto-filled with <titleId>.<ext> if blank')
 
     # Package inspection banner / preview inside the card
     p2f_info_frame = tk.Frame(p2f_body, bg=COLORS['bg_3'], bd=0, padx=12, pady=10)
@@ -1410,9 +1411,20 @@ def build_convert_tab(parent, app):
     opts_frame = tk.Frame(p2f_body, bg=COLORS['bg_2'])
     opts_frame.pack(fill='x', pady=(12, 4))
 
+    # Format selector
+    fmt_col = tk.Frame(opts_frame, bg=COLORS['bg_2'])
+    fmt_col.pack(side='left', padx=(0, 20))
+    tk.Label(fmt_col, text='Format:', font=FONTS['meta'],
+             bg=COLORS['bg_2'], fg=COLORS['fg_3']).pack(side='left', padx=(0, 6))
+    fmt_cb = ttk.Combobox(fmt_col, textvariable=p2f_dst_fmt,
+                          values=['ShadowMount (.ffpfsc)', 'Direct exFAT (.exfat) [layers=1]'],
+                          state='readonly', width=24)
+    fmt_cb.pack(side='left')
+    fmt_cb.set('ShadowMount (.ffpfsc)')
+
     # Compression level
     comp_col = tk.Frame(opts_frame, bg=COLORS['bg_2'])
-    comp_col.pack(side='left', padx=(0, 24))
+    comp_col.pack(side='left', padx=(0, 20))
     tk.Label(comp_col, text='Compression:', font=FONTS['meta'],
              bg=COLORS['bg_2'], fg=COLORS['fg_3']).pack(side='left', padx=(0, 6))
     comp_cb = ttk.Combobox(comp_col, textvariable=p2f_comp_var,
@@ -1421,6 +1433,26 @@ def build_convert_tab(parent, app):
     comp_cb.pack(side='left')
     if not p2f_comp_var.get() or p2f_comp_var.get() == '6':
         comp_cb.set('6 (Default)')
+
+    def _on_p2f_fmt(*_a):
+        val = p2f_dst_fmt.get().lower()
+        is_exfat = 'exfat' in val
+        if is_exfat:
+            comp_cb.config(state='disabled')
+            nm = p2f_name.get().strip()
+            if nm.lower().endswith('.ffpfsc'):
+                p2f_name.set(nm[:-7] + '.exfat')
+            if p2f_src.get().strip():
+                _update_hero(p2f_src.get().strip(), 'fPKG (.pkg)', 'Direct exFAT (.exfat)')
+        else:
+            comp_cb.config(state='readonly')
+            nm = p2f_name.get().strip()
+            if nm.lower().endswith('.exfat'):
+                p2f_name.set(nm[:-6] + '.ffpfsc')
+            if p2f_src.get().strip():
+                _update_hero(p2f_src.get().strip(), 'fPKG (.pkg)', 'ShadowMount (.ffpfsc)')
+
+    p2f_dst_fmt.trace_add('write', _on_p2f_fmt)
 
     # Checkboxes
     chk_col = tk.Frame(opts_frame, bg=COLORS['bg_2'])
@@ -1440,10 +1472,12 @@ def build_convert_tab(parent, app):
 
     def _on_p2f_src(*_a):
         src_path = p2f_src.get().strip()
+        is_exfat = 'exfat' in p2f_dst_fmt.get().lower()
+        dst_lbl = 'Direct exFAT (.exfat)' if is_exfat else 'ShadowMount (.ffpfsc)'
         if not src_path or not os.path.isfile(src_path):
             p2f_info_frame.pack_forget()
             p2f_info_var.set('')
-            _update_hero('', 'fPKG', 'ffpfsc')
+            _update_hero('', 'fPKG', dst_lbl)
             return
 
         if not p2f_outdir.get().strip():
@@ -1454,8 +1488,10 @@ def build_convert_tab(parent, app):
             info = inspect_ps5_pkg(src_path)
             if info.get('valid'):
                 tid = info.get('title_id', 'PPSA00000')
-                if not p2f_name.get().strip():
-                    p2f_name.set(f"{tid}.ffpfsc")
+                ext = '.exfat' if is_exfat else '.ffpfsc'
+                cur_name = p2f_name.get().strip()
+                if not cur_name or cur_name.endswith(('.ffpfsc', '.exfat')):
+                    p2f_name.set(f"{tid}{ext}")
                 conv = info.get('shadow_convertible', False)
                 status_txt = '\u2713 Ready for ShadowMount' if conv else '\u26a0 Incompatible package'
                 p2f_info_var.set(
@@ -1476,7 +1512,7 @@ def build_convert_tab(parent, app):
             if not p2f_info_frame.winfo_ismapped():
                 p2f_info_frame.pack(fill='x', pady=(6, 8), before=opts_frame)
 
-        _update_hero(src_path, 'fPKG (.pkg)', 'ShadowMount (.ffpfsc)')
+        _update_hero(src_path, 'fPKG (.pkg)', dst_lbl)
 
     p2f_src.trace_add('write', _on_p2f_src)
 
@@ -1551,11 +1587,13 @@ def build_convert_tab(parent, app):
             messagebox.showerror('Output folder missing',
                 'Pick an output folder.')
             return
+        is_exfat = 'exfat' in p2f_dst_fmt.get().lower()
+        ext = '.exfat' if is_exfat else '.ffpfsc'
         if not name:
             base = os.path.splitext(os.path.basename(src))[0]
-            name = base + '.ffpfsc'
-        if not name.lower().endswith('.ffpfsc'):
-            name = name + '.ffpfsc'
+            name = base + ext
+        if not name.lower().endswith(ext):
+            name = name + ext
 
         out_path = os.path.join(outdir, name)
         if os.path.exists(out_path):
@@ -1579,23 +1617,27 @@ def build_convert_tab(parent, app):
         custom_temp = p2f_temp_var.get().strip() or getattr(app, '_settings', {}).get('temp_dir') or None
 
         from ui.tab_ffpkg_edit import _RebuildProgress
-        prog = _RebuildProgress(parent, 'Converting fPKG \u2192 ffpfsc (ShadowMount)',
-            weights={
-                'inspect':  (0,   5),
-                'extract':  (5,  55),
-                'build':    (55, 75),
-                'compress': (75, 92),
-                'verify':   (92, 98),
-                'cleanup':  (98, 100),
-            },
-            initial_stage='inspect')
+        prog_title = 'Converting fPKG \u2192 exFAT (Direct Image)' if is_exfat else 'Converting fPKG \u2192 ffpfsc (ShadowMount)'
+        prog_weights = {
+            'inspect':  (0,   5),
+            'extract':  (5,  55),
+            'build':    (55, 95),
+            'verify':   (95, 98),
+            'cleanup':  (98, 100),
+        } if is_exfat else {
+            'inspect':  (0,   5),
+            'extract':  (5,  55),
+            'build':    (55, 75),
+            'compress': (75, 92),
+            'verify':   (92, 98),
+            'cleanup':  (98, 100),
+        }
+        prog = _RebuildProgress(parent, prog_title, weights=prog_weights, initial_stage='inspect')
 
         _set_busy_p2f(True, 'Starting conversion...')
 
         def worker():
             try:
-                from ui.ps5_pkg_extractor import convert_fpkg_to_ffpfsc
-
                 def _ui_progress(stage_msg, done, total):
                     pct = (done / max(1, total)) * 100.0
                     lmsg = stage_msg.lower()
@@ -1615,34 +1657,64 @@ def build_convert_tab(parent, app):
                     parent.after(0, prog.set_stage, prog_stage, stage_msg)
                     parent.after(0, prog.set_stage_progress, pct, f"{stage_msg} ({done}%)")
 
-                report = convert_fpkg_to_ffpfsc(
-                    pkg_path=src,
-                    output_dir=outdir,
-                    custom_name=name,
-                    temp_dir=custom_temp,
-                    compression_level=comp_lvl,
-                    auto_cleanup=auto_cleanup,
-                    save_receipt=save_receipt,
-                    external_converter=getattr(app, '_settings', {}).get('neighborhood_converter') or None,
-                    log_cb=_log,
-                    progress_cb=_ui_progress
-                )
+                if is_exfat:
+                    from ui.ps5_pkg_extractor import convert_fpkg_to_exfat
+                    report = convert_fpkg_to_exfat(
+                        pkg_path=src,
+                        output_dir=outdir,
+                        custom_name=name,
+                        temp_dir=custom_temp,
+                        auto_cleanup=auto_cleanup,
+                        save_receipt=save_receipt,
+                        log_cb=_log,
+                        progress_cb=_ui_progress
+                    )
+                    parent.after(0, prog.close)
+                    parent.after(0, lambda: _set_busy_p2f(False, 'Done \u2713'))
+                    parent.after(0, lambda: _update_hero(out_path, 'fPKG (.pkg)', 'Direct exFAT (.exfat)'))
 
-                parent.after(0, prog.close)
-                parent.after(0, lambda: _set_busy_p2f(False, 'Done \u2713'))
-                parent.after(0, lambda: _update_hero(out_path, 'fPKG (.pkg)', 'ShadowMount (.ffpfsc)'))
+                    rep_msg = (
+                        f"Converted fPKG to direct exFAT container successfully!\n\n"
+                        f"Title ID: {report.get('titleId')}\n"
+                        f"Output: {os.path.basename(out_path)}\n"
+                        f"Image Size: {report.get('imageSize', 0) / (1024**3):.2f} GB\n"
+                        f"SHA-256: {report.get('imageSha256', '')[:16]}...\n\n"
+                        f"Single-layer (layers=1) mounting for ShadowMount+!"
+                    )
+                    if save_receipt:
+                        rep_msg += f"\nVerification receipt saved to:\n{os.path.basename(out_path)}.verified.json"
 
-                rep_msg = (
-                    f"Converted fPKG to ShadowMount .ffpfsc successfully!\n\n"
-                    f"Title ID: {report.get('titleId')}\n"
-                    f"Output: {os.path.basename(out_path)}\n"
-                    f"Image Size: {report.get('imageSize', 0) / (1024**3):.2f} GB\n"
-                    f"SHA-256: {report.get('imageSha256', '')[:16]}...\n"
-                )
-                if save_receipt:
-                    rep_msg += f"\nVerification receipt saved to:\n{os.path.basename(out_path)}.verified.json"
+                    parent.after(0, lambda: messagebox.showinfo('fPKG Converted to exFAT', rep_msg))
 
-                parent.after(0, lambda: messagebox.showinfo('fPKG Converted Successfully', rep_msg))
+                else:
+                    from ui.ps5_pkg_extractor import convert_fpkg_to_ffpfsc
+                    report = convert_fpkg_to_ffpfsc(
+                        pkg_path=src,
+                        output_dir=outdir,
+                        custom_name=name,
+                        temp_dir=custom_temp,
+                        compression_level=comp_lvl,
+                        auto_cleanup=auto_cleanup,
+                        save_receipt=save_receipt,
+                        external_converter=getattr(app, '_settings', {}).get('neighborhood_converter') or None,
+                        log_cb=_log,
+                        progress_cb=_ui_progress
+                    )
+                    parent.after(0, prog.close)
+                    parent.after(0, lambda: _set_busy_p2f(False, 'Done \u2713'))
+                    parent.after(0, lambda: _update_hero(out_path, 'fPKG (.pkg)', 'ShadowMount (.ffpfsc)'))
+
+                    rep_msg = (
+                        f"Converted fPKG to ShadowMount .ffpfsc successfully!\n\n"
+                        f"Title ID: {report.get('titleId')}\n"
+                        f"Output: {os.path.basename(out_path)}\n"
+                        f"Image Size: {report.get('imageSize', 0) / (1024**3):.2f} GB\n"
+                        f"SHA-256: {report.get('imageSha256', '')[:16]}...\n"
+                    )
+                    if save_receipt:
+                        rep_msg += f"\nVerification receipt saved to:\n{os.path.basename(out_path)}.verified.json"
+
+                    parent.after(0, lambda: messagebox.showinfo('fPKG Converted Successfully', rep_msg))
 
                 try:
                     from ui.release_notes import note_successful_operation

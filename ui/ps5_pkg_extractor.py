@@ -1301,3 +1301,165 @@ def convert_fpkg_to_ffpfsc(
             except Exception:
                 pass
         raise
+
+
+def convert_fpkg_to_exfat(
+    pkg_path: str,
+    output_dir: str,
+    custom_name: str = "",
+    temp_dir: Optional[str] = None,
+    auto_cleanup: bool = True,
+    save_receipt: bool = True,
+    log_cb: Optional[Callable[[str], None]] = None,
+    progress_cb: Optional[Callable[[str, int, int], None]] = None,
+    cancel_cb: Optional[Callable[[], bool]] = None
+) -> dict:
+    """Convert a PS5 fPKG (.pkg) directly into an exFAT (.exfat) disk image.
+
+    This format mounts as single-layer (layers=1) on ShadowMount+ with
+    maximum stability and zero kernel I/O timeout issues.
+    """
+    def _log(msg: str):
+        if log_cb:
+            log_cb(msg + "\n" if not msg.endswith("\n") else msg)
+
+    def _prog(stage: str, done: int, total: int = 100):
+        if progress_cb:
+            progress_cb(stage, done, total)
+
+    pkg_path = os.path.abspath(pkg_path)
+    output_dir = os.path.abspath(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+
+    _log(f"[CONVERT] Starting PS5 fPKG -> exFAT (.exfat) conversion")
+    _log(f"[CONVERT] Source package: {pkg_path}")
+    _log(f"[CONVERT] Output folder:   {output_dir}")
+
+    # Step 1: Inspection & validation
+    _prog("Inspecting PS5 package...", 2, 100)
+    info = inspect_ps5_pkg(pkg_path)
+    if not info.get("valid"):
+        raise ValueError(info.get("error", "Invalid PS5 package"))
+
+    if not info.get("shadow_convertible"):
+        raise ValueError(
+            f"Package '{info['title_id']}' is not a convertible PS5 debug base game. "
+            f"Signing: {info['signing']}, Type: {hex(info['content_type'])}, "
+            f"Flags: {hex(info['content_flags'])}."
+        )
+
+    title_id = info["title_id"]
+    final_name = custom_name.strip() if custom_name.strip() else f"{title_id}.exfat"
+    if not final_name.lower().endswith(".exfat"):
+        final_name += ".exfat"
+    final_path = os.path.normpath(os.path.join(output_dir, final_name))
+
+    # Working folder
+    staging_base = temp_dir if (temp_dir and os.path.isdir(temp_dir)) else output_dir
+    work_id = f"PSN-exfat-conversion-{int(time.time())}"
+    work_dir = os.path.join(staging_base, work_id)
+    unpacked_dir = os.path.join(work_dir, "unpacked")
+    os.makedirs(unpacked_dir, exist_ok=True)
+
+    _log(f"[CONVERT] Title ID: {title_id} ({info.get('title_name', 'Unknown')})")
+    _log(f"[CONVERT] Working directory: {work_dir}")
+
+    try:
+        # Step 2: Extraction
+        _prog("Extracting package contents & restoring metadata...", 10, 100)
+        _log("[CONVERT] Extracting package files and reconstructing game tree...")
+        extract_ps5_pkg(
+            pkg_path, unpacked_dir,
+            progress_cb=lambda stg, d, t: _prog(f"Extracting: {stg}", 10 + int(45 * (d / max(1, t))), 100),
+            cancel_cb=cancel_cb
+        )
+
+        eboot_file = os.path.join(unpacked_dir, "eboot.bin")
+        param_file = os.path.join(unpacked_dir, "sce_sys", "param.json")
+        icon_file = os.path.join(unpacked_dir, "sce_sys", "icon0.png")
+        if not os.path.isfile(eboot_file) or os.path.getsize(eboot_file) < 1024:
+            raise RuntimeError(
+                f"Extraction failed: valid 'eboot.bin' could not be found for {title_id}."
+            )
+        if not os.path.isfile(param_file):
+            raise RuntimeError("Extraction failed: sce_sys/param.json missing")
+        if not os.path.isfile(icon_file):
+            _log("[CONVERT] Warning: sce_sys/icon0.png not found, creating fallback icon...")
+            with open(icon_file, "wb") as icf:
+                icf.write(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
+
+        _log("[CONVERT] Game tree reconstructed and verified successfully.")
+
+        # Step 3: Build exFAT image container
+        _prog("Building native exFAT image container...", 60, 100)
+        _log(f"[CONVERT] Creating native exFAT container: {final_path}")
+
+        if sys.platform == "darwin":
+            from make_image_mac import build_image as mac_build_image
+            rc = mac_build_image(final_path, unpacked_dir)
+            if rc != 0 or not os.path.isfile(final_path):
+                raise RuntimeError(f"macOS native exFAT image creation failed (code {rc})")
+        else:
+            bat_path = os.path.join(os.path.dirname(__file__), "..", "make_image.bat")
+            cmd = ["cmd.exe", "/c", bat_path, unpacked_dir, final_path]
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            if res.returncode != 0 or not os.path.isfile(final_path):
+                raise RuntimeError(f"exFAT image build failed: {res.stderr or res.stdout}")
+
+        if cancel_cb and cancel_cb():
+            raise InterruptedError("Conversion cancelled")
+
+        final_size = os.path.getsize(final_path)
+        source_size = os.path.getsize(pkg_path)
+
+        _prog("Computing verified image checksums...", 96, 100)
+        h = hashlib.sha256()
+        with open(final_path, "rb") as f:
+            while chunk := f.read(1024 * 1024):
+                h.update(chunk)
+        image_sha256 = h.hexdigest().upper()
+
+        receipt_path = final_path + ".verified.json" if save_receipt else ""
+
+        report = {
+            "verified": True,
+            "titleId": title_id,
+            "source": pkg_path,
+            "sourceSize": source_size,
+            "sourceModifiedUtc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(os.path.getmtime(pkg_path))),
+            "output": final_path,
+            "output_exfat": final_path,
+            "receipt_path": receipt_path,
+            "imageSize": final_size,
+            "imageSha256": image_sha256,
+            "convertedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "converter": "PS5 exFAT Image Builder (macOS Native)"
+        }
+
+        if save_receipt and receipt_path:
+            with open(receipt_path, "w", encoding="utf-8") as rf:
+                json.dump(report, rf, indent=2)
+            _log(f"[CONVERT] Verification receipt written to: {receipt_path}")
+
+        # Step 4: Automatic Cleanup
+        if auto_cleanup:
+            _prog("Cleaning up temporary working files...", 98, 100)
+            _log("[CONVERT] Cleaning up temporary unpacked files (source PKG preserved)...")
+            try:
+                shutil.rmtree(work_dir, ignore_errors=True)
+            except Exception as e:
+                _log(f"[CONVERT WARNING] Could not remove work dir: {e}")
+
+        _prog("Conversion complete!", 100, 100)
+        _log(f"[CONVERT SUCCESS] Completed: {final_path} ({final_size / 1024**3:.2f} GB)")
+        return report
+
+    except Exception as exc:
+        _log(f"[CONVERT ERROR] {exc}")
+        if auto_cleanup and os.path.isdir(work_dir):
+            try:
+                shutil.rmtree(work_dir, ignore_errors=True)
+            except Exception:
+                pass
+        raise
+
