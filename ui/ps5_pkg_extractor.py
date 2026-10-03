@@ -613,15 +613,27 @@ def extract_ps5_pkg(pkg_path: str, output_dir: str,
     if tool_cmd:
         _report("Extracting inner game image with ProsperoPkgTool...", 15, 100)
         env = os.environ.copy()
-        if os.path.isdir("/opt/homebrew/Cellar/dotnet"):
-            for ver in os.listdir("/opt/homebrew/Cellar/dotnet"):
-                droot = f"/opt/homebrew/Cellar/dotnet/{ver}/libexec"
-                if os.path.isdir(droot):
-                    env["DOTNET_ROOT"] = droot
+        if not env.get("DOTNET_ROOT"):
+            for cand in [
+                "/opt/homebrew/opt/dotnet/libexec",
+                "/opt/homebrew/opt/dotnet",
+                "/usr/local/share/dotnet",
+            ]:
+                if os.path.isdir(cand):
+                    env["DOTNET_ROOT"] = cand
                     break
+            if not env.get("DOTNET_ROOT") and os.path.isdir("/opt/homebrew/Cellar/dotnet"):
+                for ver in sorted(os.listdir("/opt/homebrew/Cellar/dotnet"), reverse=True):
+                    droot = f"/opt/homebrew/Cellar/dotnet/{ver}/libexec"
+                    if os.path.isdir(droot):
+                        env["DOTNET_ROOT"] = droot
+                        break
         try:
+            cmd = list(tool_cmd) + ["img_extract", pkg_path, output_dir]
+            if passcode:
+                cmd.extend(["--passcode", passcode])
             proc = subprocess.Popen(
-                tool_cmd + ["img_extract", pkg_path, output_dir],
+                cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -947,16 +959,44 @@ def extract_ps5_pkg(pkg_path: str, output_dir: str,
                 "contentVersion": info["version"]
             }, pf, indent=2)
 
-    # Check eboot.bin
+    # Check eboot.bin and promote nested files if game payload was extracted to a subdirectory
     eboot_path = os.path.join(output_dir, "eboot.bin")
     if not os.path.isfile(eboot_path):
-        # Look in subdirectories in case of nested layout
+        candidate_root = None
         for root, _, files in os.walk(output_dir):
-            for fn in files:
-                if fn.lower() == "eboot.bin":
-                    shutil.copy2(os.path.join(root, fn), eboot_path)
+            if any(fn.lower() == "eboot.bin" for fn in files):
+                if os.path.normpath(root) != os.path.normpath(output_dir):
+                    candidate_root = root
                     break
-            if os.path.isfile(eboot_path):
+
+        if candidate_root:
+            _report(f"Promoting nested game directory '{os.path.basename(candidate_root)}' to root...", 92, 100)
+            rel = os.path.relpath(candidate_root, output_dir)
+            top_level_sub = os.path.join(output_dir, rel.split(os.sep)[0])
+
+            for root, _, files in os.walk(candidate_root):
+                sub_rel = os.path.relpath(root, candidate_root)
+                target_dir = os.path.normpath(os.path.join(output_dir, sub_rel))
+                os.makedirs(target_dir, exist_ok=True)
+                for fn in files:
+                    s_file = os.path.join(root, fn)
+                    d_file = os.path.join(target_dir, fn)
+                    if not os.path.exists(d_file) or (os.path.getsize(d_file) == 0 and os.path.getsize(s_file) > 0):
+                        if os.path.exists(d_file):
+                            try:
+                                os.remove(d_file)
+                            except OSError:
+                                pass
+                        shutil.move(s_file, d_file)
+
+            if os.path.isdir(top_level_sub) and os.path.normpath(top_level_sub) != os.path.normpath(output_dir):
+                shutil.rmtree(top_level_sub, ignore_errors=True)
+
+    # Re-check case-insensitively at root
+    if not os.path.isfile(eboot_path):
+        for fn in os.listdir(output_dir):
+            if fn.lower() == "eboot.bin" and fn != "eboot.bin":
+                os.rename(os.path.join(output_dir, fn), eboot_path)
                 break
 
     _report("Extraction complete.", 100, 100)
@@ -965,6 +1005,21 @@ def extract_ps5_pkg(pkg_path: str, output_dir: str,
         "total_bytes": total_extracted_bytes,
         "title_id": info["title_id"]
     }
+
+
+def _seed_empty_dirs(root_dir: str) -> list[str]:
+    """Seed empty directories with 0-byte .pfskeep so mkpfs doesn't drop them."""
+    markers = []
+    for root, dirs, files in os.walk(root_dir):
+        if not dirs and not files:
+            marker = os.path.join(root, ".pfskeep")
+            try:
+                with open(marker, "wb"):
+                    pass
+                markers.append(marker)
+            except OSError:
+                pass
+    return markers
 
 
 # ── Full Conversion Pipeline (fPKG → ffpfsc) ──────────────────────────
@@ -984,14 +1039,14 @@ def convert_fpkg_to_ffpfsc(
 ) -> dict:
     """Convert a PS5 fPKG (.pkg) into a verified ShadowMount .ffpfsc image.
 
-    Follows the PS-Neighborhood conversion architecture:
+    Follows the official ShadowMount+ / MicroMount native two-step architecture:
     1. Validate package header, Title ID (PPSAxxxxx) and FPKG debug signing.
-    2. Extract clean game tree (PFS files + CNT metadata) to staging.
-    3. Build intermediate filesystem container (.exfat).
-    4. Compress container into ShadowMount .ffpfsc using mkpfs.
-    5. Verify every block of the compressed image.
-    6. Retain SHA-256 verification receipt (<titleId>.ffpfsc.verified.json).
-    7. Clean up temporary extracted staging files (original PKG preserved).
+    2. Extract clean game tree (inner PFS files + outer CNT metadata) to staging.
+    3. Step 1/2: Build uncompressed native PFS container (pfs_image.dat) with mkpfs pack folder.
+    4. Step 2/2: Compress pfs_image.dat into ShadowMount .ffpfsc with mkpfs pack file.
+    5. Verify compressed image blocks and structure with mkpfs verify.
+    6. Retain SHA-256 verification receipt (<name>.ffpfsc.verified.json).
+    7. Automatically clean up temporary staging files (original PKG preserved).
 
     Returns report dict.
     """
@@ -1104,10 +1159,10 @@ def convert_fpkg_to_ffpfsc(
             eboot_file = os.path.join(unpacked_dir, "eboot.bin")
             param_file = os.path.join(unpacked_dir, "sce_sys", "param.json")
             icon_file = os.path.join(unpacked_dir, "sce_sys", "icon0.png")
-            if not os.path.isfile(eboot_file):
-                # Ensure dummy eboot if payload was virtualized
-                with open(eboot_file, "wb") as ef:
-                    ef.write(b"\x7fELF" + b"\0" * 4096)
+            if not os.path.isfile(eboot_file) or os.path.getsize(eboot_file) < 1024:
+                raise RuntimeError(
+                    f"Extraction failed: valid 'eboot.bin' could not be found for {title_id}."
+                )
             if not os.path.isfile(param_file):
                 raise RuntimeError("Extraction failed: sce_sys/param.json missing")
             if not os.path.isfile(icon_file):
@@ -1116,62 +1171,72 @@ def convert_fpkg_to_ffpfsc(
                     # Valid 1x1 PNG fallback
                     icf.write(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
 
-            _log("[CONVERT] Game tree reconstructed successfully.")
+            _log("[CONVERT] Game tree reconstructed and verified successfully.")
 
-            # Step 3: Build intermediate .exfat image
-            _prog("Building intermediate filesystem image...", 50, 100)
-            inter_exfat = os.path.join(work_dir, f"{title_id}.exfat")
-            _log(f"[CONVERT] Creating inner image: {inter_exfat}")
+            # Step 3: Build uncompressed native PFS container (pfs_image.dat)
+            # IMPORTANT: ShadowMount expects the inner image to be named exactly 'pfs_image.dat'.
+            # Packing a nested .exfat creates a 2-layer virtual device (layers=2) that causes
+            # kernel I/O timeouts and crashes on PS5.
+            _prog("Building native PFS container (Step 1/2)...", 50, 100)
+            pfs_image = os.path.join(work_dir, "pfs_image.dat")
+            _log(f"[CONVERT] Step 1/2: Packing game tree into uncompressed PFS: {pfs_image}")
 
-            if sys.platform == "darwin":
-                # Use make_image_mac.py native engine
-                from make_image_mac import build_image as mac_build_image
-                rc = mac_build_image(inter_exfat, unpacked_dir)
-                if rc != 0 or not os.path.isfile(inter_exfat):
-                    raise RuntimeError(f"macOS native exFAT image creation failed (code {rc})")
-            else:
-                # Windows fallback via make_image.bat
-                bat_path = os.path.join(os.path.dirname(__file__), "..", "make_image.bat")
-                cmd = ["cmd.exe", "/c", bat_path, unpacked_dir, inter_exfat]
-                res = subprocess.run(cmd, capture_output=True, text=True)
-                if res.returncode != 0 or not os.path.isfile(inter_exfat):
-                    raise RuntimeError(f"exFAT image build failed: {res.stderr or res.stdout}")
+            from ui.mkpfs_runner import run_mkpfs
+
+            # Seed empty directory markers (.pfskeep) so mkpfs preserves empty directory tree
+            _seed_empty_dirs(unpacked_dir)
+
+            argv1 = [
+                "pack", "folder",
+                "--no-compress",
+                "--no-adjust-output-file-extension",
+                "--version", "PS5",
+                "--inode-bits", "32",
+                unpacked_dir,
+                pfs_image
+            ]
+            rc1 = run_mkpfs(
+                argv1,
+                log_cb=lambda line: _log(f"[MKPFS PACK] {line}"),
+                progress_cb=lambda pct, msg: _prog(f"Packing PFS: {msg}", 50 + int(20 * (pct / 100)), 100)
+            )
+            if rc1 != 0 or not os.path.isfile(pfs_image):
+                raise RuntimeError(f"mkpfs pack folder failed with code {rc1}")
 
             if cancel_cb and cancel_cb():
                 raise InterruptedError("Conversion cancelled")
 
-            inter_size = os.path.getsize(inter_exfat)
-            _log(f"[CONVERT] Intermediate exFAT ready ({inter_size / 1024**3:.2f} GB).")
+            pfs_size = os.path.getsize(pfs_image)
+            _log(f"[CONVERT] Native PFS image ready ({pfs_size / 1024**3:.2f} GB).")
 
-            # Step 4: Compress into .ffpfsc using mkpfs
-            _prog("Compressing image to ShadowMount (.ffpfsc)...", 70, 100)
-            _log(f"[CONVERT] Compressing with mkpfs (level {compression_level})...")
+            # Step 4: Compress pfs_image.dat into .ffpfsc using mkpfs pack file
+            _prog("Compressing image to ShadowMount (.ffpfsc) (Step 2/2)...", 70, 100)
+            _log(f"[CONVERT] Step 2/2: Compressing pfs_image.dat with mkpfs (level {compression_level})...")
 
-            from ui.mkpfs_runner import run_mkpfs
             if os.path.isfile(final_path):
                 try:
                     os.remove(final_path)
                 except Exception:
                     pass
 
-            argv = [
+            argv2 = [
                 "pack", "file",
                 "--version", "PS5",
                 "--inode-bits", "32",
                 "--compression-level", str(compression_level),
-                inter_exfat,
+                pfs_image,
                 final_path
             ]
-            mk_rc = run_mkpfs(
-                argv,
-                log_cb=lambda line: _log(f"[MKPFS] {line}"),
-                progress_cb=lambda pct, msg: _prog(f"Compressing: {msg}", 70 + int(20 * (pct / 100)), 100)
+            rc2 = run_mkpfs(
+                argv2,
+                log_cb=lambda line: _log(f"[MKPFS COMPRESS] {line}"),
+                progress_cb=lambda pct, msg: _prog(f"Compressing: {msg}", 70 + int(22 * (pct / 100)), 100)
             )
-            if mk_rc != 0 or not os.path.isfile(final_path):
-                raise RuntimeError(f"mkpfs compression failed with code {mk_rc}")
+            if rc2 != 0 or not os.path.isfile(final_path):
+                raise RuntimeError(f"mkpfs compression failed with code {rc2}")
 
             # Step 5: Verification
-            _prog("Verifying every image block...", 92, 100)
+            _prog("Verifying compressed PFS image blocks...", 92, 100)
             _log("[CONVERT] Verifying compressed PFS image integrity...")
             verify_argv = ["verify", final_path]
             v_rc = run_mkpfs(verify_argv, log_cb=lambda line: _log(f"[VERIFY] {line}"))

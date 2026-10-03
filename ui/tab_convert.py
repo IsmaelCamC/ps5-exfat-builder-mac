@@ -1601,7 +1601,7 @@ def build_convert_tab(parent, app):
                     lmsg = stage_msg.lower()
                     if 'extract' in lmsg:
                         prog_stage = 'extract'
-                    elif 'intermediate' in lmsg or 'filesystem' in lmsg or 'exfat' in lmsg:
+                    elif 'intermediate' in lmsg or 'filesystem' in lmsg or 'exfat' in lmsg or 'pack' in lmsg or 'pfs' in lmsg:
                         prog_stage = 'build'
                     elif 'compress' in lmsg or 'mkpfs' in lmsg:
                         prog_stage = 'compress'
