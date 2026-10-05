@@ -25,6 +25,8 @@ $PYTHON_BIN -m pip install --upgrade \
     psutil \
     "mkpfs==0.0.8" \
     cryptography \
+    lz4 \
+    toml \
     tkmacosx
 
 ICON_ARG=""
@@ -67,6 +69,8 @@ $PYTHON_BIN -m PyInstaller \
     --collect-all mkpfs \
     --collect-all cryptography \
     --collect-all tkinterdnd2 \
+    --collect-all lz4 \
+    --collect-all toml \
     --collect-submodules ui \
     --collect-submodules ui.shared \
     --paths . \
