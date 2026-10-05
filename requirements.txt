@@ -1,0 +1,9 @@
+pyinstaller
+pillow
+tkinterdnd2
+psutil
+mkpfs==0.0.8
+cryptography
+lz4
+toml
+tkmacosx; sys_platform == 'darwin'
