@@ -870,6 +870,12 @@ def convert_fpkg_to_lz4(pkg_or_dir_path: str,
 
     is_pkg = inp.is_file() and inp.suffix.lower() == ".pkg"
 
+    if temp_dir:
+        temp_dir = str(temp_dir).strip().replace('\\', '/')
+        if temp_dir:
+            os.makedirs(temp_dir, exist_ok=True)
+        else:
+            temp_dir = None
     work_dir = Path(tempfile.mkdtemp(prefix="fpkg_lz4_", dir=temp_dir))
     extracted_app0 = work_dir / "app0"
 

@@ -125,7 +125,12 @@ def _migrate_settings(data):
 def load_settings():
     try:
         with open(_settings_path(), 'r') as f:
-            return _migrate_settings(json.load(f))
+            data = _migrate_settings(json.load(f))
+            if isinstance(data, dict) and sys.platform != 'win32':
+                for k in ('temp_dir', 'output_dir', 'ffpkg_extract_outdir', 'last_input_dir'):
+                    if k in data and isinstance(data[k], str) and '\\' in data[k]:
+                        data[k] = data[k].replace('\\', '/')
+            return data
     except Exception:
         return {}
 
@@ -5791,7 +5796,8 @@ class ExFATBuilder(_TK_BASE):
     def _browse_output(self):
         p = filedialog.askdirectory(title='Select output directory')
         if p:
-            p = p.replace('/', '\\')
+            if sys.platform == 'win32':
+                p = p.replace('/', '\\')
             self.output_dir.set(p)
             self._settings['output_dir'] = p
             save_settings(self._settings)
@@ -5801,7 +5807,8 @@ class ExFATBuilder(_TK_BASE):
         p = filedialog.askdirectory(title='Select temp folder for image building')
         if not p:
             return
-        p = p.replace('/', '\\')
+        if sys.platform == 'win32':
+            p = p.replace('/', '\\')
         self._temp_dir_var.set(p)
         self._settings['temp_dir'] = p
         save_settings(self._settings)

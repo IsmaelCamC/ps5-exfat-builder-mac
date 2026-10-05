@@ -1877,9 +1877,17 @@ def build_convert_tab(parent, app):
     field_block(lz4_body, 'Output folder',
                 var=lz4_outdir, on_browse=_lz4_browse_outdir,
                 hint='where the packed game directory or image will be saved')
+    def _lz4_browse_temp():
+        p = filedialog.askdirectory(title='Select custom temp folder for LZ4 packing')
+        if p:
+            lz4_temp_var.set(p)
+
     field_block(lz4_body, 'Output name',
                 var=lz4_name,
                 hint='folder or image filename (auto-filled from Title ID)')
+    field_block(lz4_body, 'Temp folder (Optional)',
+                var=lz4_temp_var, on_browse=_lz4_browse_temp,
+                hint='override working temp directory (e.g. /Volumes/Toshiba/temp for large games)')
 
     # Live inspection preview inside Card 4
     lz4_info_frame = tk.Frame(lz4_body, bg=COLORS['bg_3'], bd=0, padx=12, pady=10)
@@ -2214,6 +2222,8 @@ def build_convert_tab(parent, app):
         save_receipt = lz4_receipt_var.get()
         skip_verify = not lz4_verify_var.get()
         custom_temp = lz4_temp_var.get().strip() or getattr(app, '_settings', {}).get('temp_dir') or None
+        if custom_temp:
+            custom_temp = custom_temp.replace('\\', '/')
 
         is_pkg = os.path.isfile(src) and src.lower().endswith('.pkg')
 
