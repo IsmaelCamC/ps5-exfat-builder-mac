@@ -30,6 +30,7 @@ import webbrowser
 import tkinter as tk
 
 from tkinter_theme import COLORS, FONTS
+from ui.shared.scroll import attach_scroll
 
 # Support / project links (single definition).
 KOFI_URL   = 'https://ko-fi.com/deckerr9746220'
@@ -197,8 +198,7 @@ def show_release_modal(app, force=False):
     body.bind('<Configure>',
               lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
     canvas.bind('<Configure>', lambda e: canvas.itemconfig(cid, width=e.width))
-    canvas.bind('<MouseWheel>',
-                lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units'))
+    attach_scroll(canvas)
 
     pad = tk.Frame(body, bg=COLORS['bg_1'])
     pad.pack(fill='both', expand=True, padx=30, pady=(22, 18))

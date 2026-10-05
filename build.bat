@@ -1,6 +1,6 @@
 @echo off
 echo Installing dependencies...
-py -3.11 -m pip install --upgrade pyinstaller pillow tkinterdnd2 psutil mkpfs==0.0.8
+py -3.11 -m pip install --upgrade pyinstaller pillow tkinterdnd2 psutil mkpfs==0.0.8 cryptography lz4 toml
 echo.
 
 if not exist "controller.ico" (
@@ -50,6 +50,8 @@ py -3.11 -m PyInstaller --onefile --windowed --clean --noconfirm ^
     --collect-all mkpfs ^
     --collect-all cryptography ^
     --collect-all tkinterdnd2 ^
+    --collect-all lz4 ^
+    --collect-all toml ^
     --collect-submodules ui ^
     --collect-submodules ui.shared ^
     --paths . ^

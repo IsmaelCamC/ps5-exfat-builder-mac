@@ -404,12 +404,7 @@ def _scroll_host(parent):
     cv.bind('<Configure>',
             lambda e, c=cv, t=tag: c.itemconfig(t, width=e.width))
 
-    # Scroll only while the pointer is over THIS pane (3 panes stack;
-    # bind_all/unbind_all on Enter/Leave keeps them from fighting).
-    def _wheel(e, c=cv):
-        c.yview_scroll(int(-1 * (e.delta / 120)), 'units')
-    cv.bind('<Enter>', lambda _e, c=cv: c.bind_all('<MouseWheel>', _wheel))
-    cv.bind('<Leave>', lambda _e, c=cv: c.unbind_all('<MouseWheel>'))
+    attach_scroll(cv)
     return inner
 
 

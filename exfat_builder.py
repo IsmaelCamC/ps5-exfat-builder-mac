@@ -14,6 +14,7 @@ import struct
 import json
 
 from ui.mac_compat import patch_system_for_mac, IS_MACOS, setup_mac_shortcuts
+from ui.shared.scroll import attach_scroll
 patch_system_for_mac()
 
 # ── tkinterdnd2 — optional, enables drag & drop of folders ──
@@ -2735,8 +2736,7 @@ class ExFATBuilder(_TK_BASE):
             scrollregion=canvas.bbox('all')))
         canvas.bind('<Configure>',
                     lambda e: canvas.itemconfig(cid, width=e.width))
-        canvas.bind('<MouseWheel>', lambda e: canvas.yview_scroll(
-            int(-1 * (e.delta / 120)), 'units'))
+        attach_scroll(canvas)
 
         pad = tk.Frame(body, bg=_TC['bg_1'])
         pad.pack(fill='both', expand=True, padx=28, pady=(18, 22))
@@ -12365,9 +12365,7 @@ class ExFATBuilder(_TK_BASE):
             canvas.itemconfig(win, width=canvas.winfo_width())))
         canvas.bind('<Configure>',
                     lambda e: canvas.itemconfig(win, width=e.width))
-        canvas.bind('<MouseWheel>',
-                    lambda e: canvas.yview_scroll(
-                        int(-1 * (e.delta / 120)), 'units'))
+        attach_scroll(canvas)
         sb.pack(side='right', fill='y')
         canvas.pack(fill='both', expand=True)
         self._bpr_canvas = canvas
@@ -18656,8 +18654,7 @@ class ExFATBuilder(_TK_BASE):
             canvas.configure(scrollregion=canvas.bbox('all')))
         canvas.bind('<Configure>', lambda e:
             canvas.itemconfig('hb', width=e.width))
-        canvas.bind('<MouseWheel>',
-            lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), 'units'))
+        attach_scroll(canvas)
 
         def section(title):
             tk.Label(body, text=title, font=('Segoe UI', 11, 'bold'),

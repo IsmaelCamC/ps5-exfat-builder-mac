@@ -30,6 +30,7 @@ from tkinter_theme import COLORS, FONTS
 
 from ui.shared.ps5_kit import ControlHero
 from ui.shared.page_head import make_themed_button
+from ui.shared.scroll import attach_scroll
 
 # Convenience aliases for the tokens we use most in this module.
 # These map directly to keys in COLORS, no transformation.
@@ -938,11 +939,7 @@ def _build_content(parent, app):
         canvas.itemconfig(inner_id, width=e.width)
     canvas.bind('<Configure>', _on_canvas_config)
 
-    def _on_wheel(e):
-        canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units')
-    # Only bind mousewheel while pointer is over this canvas
-    canvas.bind('<Enter>', lambda _e: canvas.bind_all('<MouseWheel>', _on_wheel))
-    canvas.bind('<Leave>', lambda _e: canvas.unbind_all('<MouseWheel>'))
+    attach_scroll(canvas)
 
     # Padding wrapper inside the scroll surface
     pad = tk.Frame(inner, bg=_BG_APP)

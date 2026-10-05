@@ -41,6 +41,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog
 
 from tkinter_theme import COLORS, FONTS
+from ui.shared.scroll import attach_scroll
 
 from exfat_builder import _, _load_cover_image
 
@@ -393,14 +394,7 @@ class DumpRenameTab:
             self._canvas.itemconfig(self._list_window, width=event.width)
         self._canvas.bind('<Configure>', _on_canvas_config)
 
-        # Mouse-wheel scroll over the list
-        def _on_wheel(event):
-            self._canvas.yview_scroll(-int(event.delta / 60), 'units')
-        self._canvas.bind('<Enter>',
-                          lambda e: self._canvas.bind_all(
-                              '<MouseWheel>', _on_wheel))
-        self._canvas.bind('<Leave>',
-                          lambda e: self._canvas.unbind_all('<MouseWheel>'))
+        attach_scroll(self._canvas)
 
         # Empty-state placeholder
         self._empty_label = tk.Label(

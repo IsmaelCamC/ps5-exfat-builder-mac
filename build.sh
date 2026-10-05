@@ -8,8 +8,11 @@ echo "=========================================="
 echo " Building exFAT Image Builder for macOS   "
 echo "=========================================="
 
-PYTHON_BIN="/opt/homebrew/bin/python3.11"
-if [ ! -f "$PYTHON_BIN" ]; then
+if [ -n "$PYTHON" ]; then
+    PYTHON_BIN="$PYTHON"
+elif [ -f "/opt/homebrew/bin/python3.11" ]; then
+    PYTHON_BIN="/opt/homebrew/bin/python3.11"
+else
     PYTHON_BIN="$(which python3)"
 fi
 
